@@ -1,4 +1,4 @@
-import '@aws-cdk/assert-internal/jest';
+import { Match, Template } from '@aws-cdk/assertions';
 import * as cloudfront from '@aws-cdk/aws-cloudfront';
 import * as s3 from '@aws-cdk/aws-s3';
 import { App, Duration, Stack } from '@aws-cdk/core';
@@ -77,9 +77,24 @@ describe('With bucket', () => {
     const origin = new S3Origin(bucket, { originAccessIdentity });
     new cloudfront.Distribution(stack, 'Dist', { defaultBehavior: { origin } });
 
-    expect(stack).toHaveResourceLike('AWS::CloudFront::CloudFrontOriginAccessIdentity', {
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudFront::CloudFrontOriginAccessIdentity', {
       CloudFrontOriginAccessIdentityConfig: {
         Comment: 'Identity for bucket provided by test',
+      },
+    });
+
+    Template.fromStack(stack).hasResourceProperties('AWS::S3::BucketPolicy', {
+      PolicyDocument: {
+        Statement: [{
+          Action: 's3:GetObject',
+          Effect: 'Allow',
+          Principal: {
+            CanonicalUser: { 'Fn::GetAtt': ['OriginAccessIdentityDF1E3CAC', 'S3CanonicalUserId'] },
+          },
+          Resource: {
+            'Fn::Join': ['', [{ 'Fn::GetAtt': ['Bucket83908E77', 'Arn'] }, '/*']],
+          },
+        }],
       },
     });
   });
@@ -90,15 +105,16 @@ describe('With bucket', () => {
     const origin = new S3Origin(bucket);
     new cloudfront.Distribution(stack, 'Dist', { defaultBehavior: { origin } });
 
-    expect(stack).toHaveResourceLike('AWS::CloudFront::CloudFrontOriginAccessIdentity', {
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudFront::CloudFrontOriginAccessIdentity', {
       CloudFrontOriginAccessIdentityConfig: {
         Comment: 'Identity for StackDistOrigin15754CE84',
       },
     });
-    expect(stack).toHaveResourceLike('AWS::S3::BucketPolicy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::S3::BucketPolicy', {
       PolicyDocument: {
         Statement: [{
           Action: 's3:GetObject',
+          Effect: 'Allow',
           Principal: {
             CanonicalUser: { 'Fn::GetAtt': ['DistOrigin1S3Origin87D64058', 'S3CanonicalUserId'] },
           },
@@ -119,22 +135,77 @@ describe('With bucket', () => {
     const origin = new S3Origin(bucket);
     new cloudfront.Distribution(stack, 'Dist', { defaultBehavior: { origin } });
 
-    expect(stack).toHaveResource('AWS::CloudFront::Distribution');
-    expect(bucketStack).toHaveResource('AWS::S3::Bucket');
-    expect(bucketStack).toHaveResourceLike('AWS::CloudFront::CloudFrontOriginAccessIdentity', {
+    Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 1);
+    Template.fromStack(bucketStack).resourceCountIs('AWS::S3::Bucket', 1);
+    Template.fromStack(bucketStack).hasResourceProperties('AWS::CloudFront::CloudFrontOriginAccessIdentity', {
       CloudFrontOriginAccessIdentityConfig: {
         Comment: 'Identity for StackDistOrigin15754CE84',
       },
     });
-    expect(bucketStack).toHaveResourceLike('AWS::S3::BucketPolicy', {
+    Template.fromStack(bucketStack).hasResourceProperties('AWS::S3::BucketPolicy', {
       PolicyDocument: {
-        Statement: [{
+        Statement: [Match.objectLike({
           Principal: {
             CanonicalUser: { 'Fn::GetAtt': ['StackDistOrigin15754CE84S3Origin25582A25', 'S3CanonicalUserId'] },
           },
-        }],
+        })],
       },
     });
+  });
+
+  test('Can set a custom originId', () => {
+    const bucket = new s3.Bucket(stack, 'Bucket');
+    const bucket2 = new s3.Bucket(stack, 'Bucket2');
+    const origin2 = new S3Origin(bucket2, { originId: 'MyOtherCustomOrigin' });
+    const origin = new S3Origin(bucket, { originId: 'MyCustomOrigin' });
+    const distro = new cloudfront.Distribution(stack, 'Dist', {
+      defaultBehavior: { origin },
+    });
+    distro.addBehavior('/test', origin2);
+
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: {
+        CacheBehaviors: [
+          {
+            CachePolicyId: '658327ea-f89d-4fab-a63d-7e88639e58f6',
+            Compress: true,
+            PathPattern: '/test',
+            TargetOriginId: 'MyOtherCustomOrigin',
+            ViewerProtocolPolicy: 'allow-all',
+          },
+        ],
+        DefaultCacheBehavior: {
+          CachePolicyId: '658327ea-f89d-4fab-a63d-7e88639e58f6',
+          Compress: true,
+          TargetOriginId: 'MyCustomOrigin',
+          ViewerProtocolPolicy: 'allow-all',
+        },
+        Origins: [
+          {
+            Id: 'MyCustomOrigin',
+          },
+          {
+            Id: 'MyOtherCustomOrigin',
+          },
+        ],
+      },
+    });
+  });
+  test('Cannot set an originId duplicates', () => {
+    const bucket = new s3.Bucket(stack, 'Bucket');
+    const bucket2 = new s3.Bucket(stack, 'Bucket2');
+    const origin = new S3Origin(bucket, { originId: 'MyCustomOrigin' });
+    const origin2 = new S3Origin(bucket2, { originId: 'MyCustomOrigin' });
+    expect(() => {
+      new cloudfront.Distribution(stack, 'Dist', {
+        defaultBehavior: { origin },
+        additionalBehaviors: {
+          Origin2: {
+            origin: origin2,
+          },
+        },
+      });
+    }).toThrow(/Origin with id MyCustomOrigin already exists/);
   });
 });
 
@@ -176,6 +247,21 @@ describe('With website-configured bucket', () => {
         originSslProtocols: [
           'TLSv1.2',
         ],
+      },
+    });
+  });
+
+  test('Can set an originId', () => {
+    const bucket = new s3.Bucket(stack, 'Bucket', {
+      websiteIndexDocument: 'index.html',
+    });
+    const origin = new S3Origin(bucket, { originId: 'MyCustomOrigin' });
+    new cloudfront.Distribution(stack, 'Dist', { defaultBehavior: { origin } });
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: {
+        Origins: [{
+          Id: 'MyCustomOrigin',
+        }],
       },
     });
   });

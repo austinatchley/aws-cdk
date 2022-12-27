@@ -1,6 +1,5 @@
 import * as path from 'path';
-import '@aws-cdk/assert-internal/jest';
-import { ABSENT, ResourcePart } from '@aws-cdk/assert-internal';
+import { Match, Template } from '@aws-cdk/assertions';
 import * as iam from '@aws-cdk/aws-iam';
 import * as cdk from '@aws-cdk/core';
 import * as cxapi from '@aws-cdk/cx-api';
@@ -20,7 +19,7 @@ describe('log retention', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::IAM::Policy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
       'PolicyDocument': {
         'Statement': [
           {
@@ -42,12 +41,12 @@ describe('log retention', () => {
       ],
     });
 
-    expect(stack).toHaveResource('AWS::Lambda::Function', {
+    Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
       Handler: 'index.handler',
       Runtime: 'nodejs14.x',
     });
 
-    expect(stack).toHaveResource('Custom::LogRetention', {
+    Template.fromStack(stack).hasResourceProperties('Custom::LogRetention', {
       'ServiceToken': {
         'Fn::GetAtt': [
           'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A',
@@ -57,8 +56,351 @@ describe('log retention', () => {
       'LogGroupName': 'group',
       'RetentionInDays': 30,
     });
+  });
 
+  test('set the removalPolicy to DESTROY', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
 
+    // WHEN
+    new LogRetention(stack, 'MyLambda', {
+      logGroupName: 'group',
+      retention: RetentionDays.ONE_DAY,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
+      'PolicyDocument': {
+        'Statement': [
+          {
+            'Action': [
+              'logs:PutRetentionPolicy',
+              'logs:DeleteRetentionPolicy',
+            ],
+            'Effect': 'Allow',
+            'Resource': '*',
+          },
+          {
+            'Action': 'logs:DeleteLogGroup',
+            'Effect': 'Allow',
+            'Resource': {
+              'Fn::Join': [
+                '',
+                [
+                  'arn:',
+                  {
+                    'Ref': 'AWS::Partition',
+                  },
+                  ':logs:',
+                  {
+                    'Ref': 'AWS::Region',
+                  },
+                  ':',
+                  {
+                    'Ref': 'AWS::AccountId',
+                  },
+                  ':log-group:group:*',
+                ],
+              ],
+            },
+          },
+        ],
+        'Version': '2012-10-17',
+      },
+      'PolicyName': 'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRoleDefaultPolicyADDA7DEB',
+      'Roles': [
+        {
+          'Ref': 'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRole9741ECFB',
+        },
+      ],
+    });
+
+    Template.fromStack(stack).hasResourceProperties('Custom::LogRetention', {
+      'ServiceToken': {
+        'Fn::GetAtt': [
+          'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A',
+          'Arn',
+        ],
+      },
+      'LogGroupName': 'group',
+      'RetentionInDays': 1,
+      'RemovalPolicy': 'destroy',
+    });
+  });
+
+  test('set the removalPolicy to RETAIN', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    new LogRetention(stack, 'MyLambda', {
+      logGroupName: 'group',
+      retention: RetentionDays.ONE_DAY,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
+      'PolicyDocument': {
+        'Statement': [
+          {
+            'Action': [
+              'logs:PutRetentionPolicy',
+              'logs:DeleteRetentionPolicy',
+            ],
+            'Effect': 'Allow',
+            'Resource': '*',
+          },
+        ],
+        'Version': '2012-10-17',
+      },
+      'PolicyName': 'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRoleDefaultPolicyADDA7DEB',
+      'Roles': [
+        {
+          'Ref': 'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRole9741ECFB',
+        },
+      ],
+    });
+
+    Template.fromStack(stack).hasResourceProperties('Custom::LogRetention', {
+      'ServiceToken': {
+        'Fn::GetAtt': [
+          'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A',
+          'Arn',
+        ],
+      },
+      'LogGroupName': 'group',
+      'RetentionInDays': 1,
+      'RemovalPolicy': 'retain',
+    });
+  });
+
+  describe('multiple log retention resources', () => {
+    test('both removalPolicy DESTROY', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+
+      // WHEN
+      new LogRetention(stack, 'MyLambda1', {
+        logGroupName: 'group1',
+        retention: RetentionDays.ONE_DAY,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      });
+
+      new LogRetention(stack, 'MyLambda2', {
+        logGroupName: 'group2',
+        retention: RetentionDays.ONE_DAY,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      });
+
+      // THEN
+      Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
+        'PolicyDocument': {
+          'Statement': [
+            {
+              'Action': [
+                'logs:PutRetentionPolicy',
+                'logs:DeleteRetentionPolicy',
+              ],
+              'Effect': 'Allow',
+              'Resource': '*',
+            },
+            {
+              'Action': 'logs:DeleteLogGroup',
+              'Effect': 'Allow',
+              'Resource': {
+                'Fn::Join': [
+                  '',
+                  [
+                    'arn:',
+                    {
+                      'Ref': 'AWS::Partition',
+                    },
+                    ':logs:',
+                    {
+                      'Ref': 'AWS::Region',
+                    },
+                    ':',
+                    {
+                      'Ref': 'AWS::AccountId',
+                    },
+                    ':log-group:group1:*',
+                  ],
+                ],
+              },
+            },
+            {
+              'Action': 'logs:DeleteLogGroup',
+              'Effect': 'Allow',
+              'Resource': {
+                'Fn::Join': [
+                  '',
+                  [
+                    'arn:',
+                    {
+                      'Ref': 'AWS::Partition',
+                    },
+                    ':logs:',
+                    {
+                      'Ref': 'AWS::Region',
+                    },
+                    ':',
+                    {
+                      'Ref': 'AWS::AccountId',
+                    },
+                    ':log-group:group2:*',
+                  ],
+                ],
+              },
+            },
+          ],
+          'Version': '2012-10-17',
+        },
+        'PolicyName': 'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRoleDefaultPolicyADDA7DEB',
+        'Roles': [
+          {
+            'Ref': 'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRole9741ECFB',
+          },
+        ],
+      });
+
+      Template.fromStack(stack).hasResourceProperties('Custom::LogRetention', {
+        'ServiceToken': {
+          'Fn::GetAtt': [
+            'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A',
+            'Arn',
+          ],
+        },
+        'LogGroupName': 'group1',
+        'RetentionInDays': 1,
+        'RemovalPolicy': 'destroy',
+      });
+
+      Template.fromStack(stack).hasResourceProperties('Custom::LogRetention', {
+        'ServiceToken': {
+          'Fn::GetAtt': [
+            'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A',
+            'Arn',
+          ],
+        },
+        'LogGroupName': 'group2',
+        'RetentionInDays': 1,
+        'RemovalPolicy': 'destroy',
+      });
+    });
+
+    test('with removalPolicy DESTROY and removalPolicy RETAIN', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+
+      // WHEN
+      new LogRetention(stack, 'MyLambda1', {
+        logGroupName: 'group1',
+        retention: RetentionDays.ONE_DAY,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      });
+
+      new LogRetention(stack, 'MyLambda2', {
+        logGroupName: 'group2',
+        retention: RetentionDays.ONE_DAY,
+        removalPolicy: cdk.RemovalPolicy.RETAIN,
+      });
+
+      // THEN
+      Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
+        'PolicyDocument': {
+          'Statement': [
+            {
+              'Action': [
+                'logs:PutRetentionPolicy',
+                'logs:DeleteRetentionPolicy',
+              ],
+              'Effect': 'Allow',
+              'Resource': '*',
+            },
+            {
+              'Action': 'logs:DeleteLogGroup',
+              'Effect': 'Allow',
+              'Resource': {
+                'Fn::Join': [
+                  '',
+                  [
+                    'arn:',
+                    {
+                      'Ref': 'AWS::Partition',
+                    },
+                    ':logs:',
+                    {
+                      'Ref': 'AWS::Region',
+                    },
+                    ':',
+                    {
+                      'Ref': 'AWS::AccountId',
+                    },
+                    ':log-group:group1:*',
+                  ],
+                ],
+              },
+            },
+          ],
+          'Version': '2012-10-17',
+        },
+        'PolicyName': 'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRoleDefaultPolicyADDA7DEB',
+        'Roles': [
+          {
+            'Ref': 'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aServiceRole9741ECFB',
+          },
+        ],
+      });
+
+      Template.fromStack(stack).hasResourceProperties('Custom::LogRetention', {
+        'ServiceToken': {
+          'Fn::GetAtt': [
+            'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A',
+            'Arn',
+          ],
+        },
+        'LogGroupName': 'group1',
+        'RetentionInDays': 1,
+        'RemovalPolicy': 'destroy',
+      });
+
+      Template.fromStack(stack).hasResourceProperties('Custom::LogRetention', {
+        'ServiceToken': {
+          'Fn::GetAtt': [
+            'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A',
+            'Arn',
+          ],
+        },
+        'LogGroupName': 'group2',
+        'RetentionInDays': 1,
+        'RemovalPolicy': 'retain',
+      });
+    });
+  });
+
+  test('the removalPolicy is not set', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    new LogRetention(stack, 'MyLambda', {
+      logGroupName: 'group',
+      retention: RetentionDays.ONE_DAY,
+    });
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('Custom::LogRetention', {
+      'ServiceToken': {
+        'Fn::GetAtt': [
+          'LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A',
+          'Arn',
+        ],
+      },
+      'LogGroupName': 'group',
+      'RetentionInDays': 1,
+    });
   });
 
   test('with imported role', () => {
@@ -74,7 +416,7 @@ describe('log retention', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::IAM::Policy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
       'PolicyDocument': {
         'Statement': [
           {
@@ -94,9 +436,7 @@ describe('log retention', () => {
       ],
     });
 
-    expect(stack).toCountResources('AWS::IAM::Role', 0);
-
-
+    Template.fromStack(stack).resourceCountIs('AWS::IAM::Role', 0);
   });
 
   test('with RetentionPeriod set to Infinity', () => {
@@ -107,11 +447,9 @@ describe('log retention', () => {
       retention: RetentionDays.INFINITE,
     });
 
-    expect(stack).toHaveResource('Custom::LogRetention', {
-      RetentionInDays: ABSENT,
+    Template.fromStack(stack).hasResourceProperties('Custom::LogRetention', {
+      RetentionInDays: Match.absent(),
     });
-
-
   });
 
   test('with LogGroupRegion specified', () => {
@@ -122,11 +460,9 @@ describe('log retention', () => {
       retention: RetentionDays.INFINITE,
     });
 
-    expect(stack).toHaveResource('Custom::LogRetention', {
+    Template.fromStack(stack).hasResourceProperties('Custom::LogRetention', {
       LogGroupRegion: 'us-east-1',
     });
-
-
   });
 
   test('log group ARN is well formed and conforms', () => {
@@ -140,7 +476,6 @@ describe('log retention', () => {
     expect(logGroupArn.indexOf('logs')).toBeGreaterThan(-1);
     expect(logGroupArn.indexOf('log-group')).toBeGreaterThan(-1);
     expect(logGroupArn.endsWith(':*')).toEqual(true);
-
   });
 
   test('log group ARN is well formed and conforms when region is specified', () => {
@@ -156,7 +491,6 @@ describe('log retention', () => {
     expect(logGroupArn.indexOf('logs')).toBeGreaterThan(-1);
     expect(logGroupArn.indexOf('log-group')).toBeGreaterThan(-1);
     expect(logGroupArn.endsWith(':*')).toEqual(true);
-
   });
 
   test('retention Lambda CfnResource receives propagated tags', () => {
@@ -167,7 +501,7 @@ describe('log retention', () => {
       retention: RetentionDays.ONE_MONTH,
     });
 
-    expect(stack).toHaveResourceLike('AWS::Lambda::Function', {
+    Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
       Tags: [
         {
           Key: 'test-key',
@@ -175,7 +509,6 @@ describe('log retention', () => {
         },
       ],
     });
-
   });
 
   test('asset metadata added to log retention construct lambda function', () => {
@@ -193,13 +526,12 @@ describe('log retention', () => {
     });
 
     // Then
-    expect(stack).toHaveResource('AWS::Lambda::Function', {
+    Template.fromStack(stack).hasResource('AWS::Lambda::Function', {
       Metadata: {
         'aws:asset:path': assetLocation,
         'aws:asset:is-bundled': false,
         'aws:asset:property': 'Code',
       },
-    }, ResourcePart.CompleteDefinition);
-
+    });
   });
 });

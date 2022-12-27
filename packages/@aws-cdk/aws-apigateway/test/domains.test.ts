@@ -1,5 +1,4 @@
-import { ABSENT } from '@aws-cdk/assert-internal';
-import '@aws-cdk/assert-internal/jest';
+import { Match, Template } from '@aws-cdk/assertions';
 import * as acm from '@aws-cdk/aws-certificatemanager';
 import { Bucket } from '@aws-cdk/aws-s3';
 import { Stack } from '@aws-cdk/core';
@@ -27,13 +26,13 @@ describe('domains', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'example.com',
       'EndpointConfiguration': { 'Types': ['REGIONAL'] },
       'RegionalCertificateArn': { 'Ref': 'Cert5C9FAEC1' },
     });
 
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'example.com',
       'EndpointConfiguration': { 'Types': ['EDGE'] },
       'CertificateArn': { 'Ref': 'Cert5C9FAEC1' },
@@ -57,7 +56,7 @@ describe('domains', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'example.com',
       'EndpointConfiguration': { 'Types': ['REGIONAL'] },
       'RegionalCertificateArn': { 'Ref': 'Cert5C9FAEC1' },
@@ -88,25 +87,25 @@ describe('domains', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'old.example.com',
       'EndpointConfiguration': { 'Types': ['REGIONAL'] },
       'RegionalCertificateArn': { 'Ref': 'Cert5C9FAEC1' },
       'SecurityPolicy': 'TLS_1_0',
     });
 
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'new.example.com',
       'EndpointConfiguration': { 'Types': ['REGIONAL'] },
       'RegionalCertificateArn': { 'Ref': 'Cert5C9FAEC1' },
       'SecurityPolicy': 'TLS_1_2',
     });
 
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'default.example.com',
       'EndpointConfiguration': { 'Types': ['REGIONAL'] },
       'RegionalCertificateArn': { 'Ref': 'Cert5C9FAEC1' },
-      'SecurityPolicy': ABSENT,
+      'SecurityPolicy': Match.absent(),
     });
   });
 
@@ -125,7 +124,7 @@ describe('domains', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'DomainName': {
         'Ref': 'Domain66AC69E0',
       },
@@ -136,6 +135,209 @@ describe('domains', () => {
         'Ref': 'apiDeploymentStageprod896C8101',
       },
     });
+  });
+
+  describe('multi-level mapping', () => {
+    test('can add a multi-level path', () => {
+      // GIVEN
+      const stack = new Stack();
+      const api = new apigw.RestApi(stack, 'api');
+      api.root.addMethod('GET');
+
+      // WHEN
+      new apigw.DomainName(stack, 'Domain', {
+        domainName: 'foo.com',
+        certificate: acm.Certificate.fromCertificateArn(stack, 'cert', 'arn:aws:acm:us-east-1:1111111:certificate/11-3336f1-44483d-adc7-9cd375c5169d'),
+        endpointType: apigw.EndpointType.REGIONAL,
+        mapping: api,
+        basePath: 'v1/api',
+      });
+
+      // THEN
+      Template.fromStack(stack).hasResourceProperties('AWS::ApiGatewayV2::ApiMapping', {
+        'DomainName': {
+          'Ref': 'Domain66AC69E0',
+        },
+        'ApiId': {
+          'Ref': 'apiC8550315',
+        },
+        'Stage': {
+          'Ref': 'apiDeploymentStageprod896C8101',
+        },
+        'ApiMappingKey': 'v1/api',
+      });
+    });
+
+    test('throws if endpointType is not REGIONAL', () => {
+      // GIVEN
+      const stack = new Stack();
+      const api = new apigw.RestApi(stack, 'api');
+      api.root.addMethod('GET');
+
+      // THEN
+      expect(() => {
+        new apigw.DomainName(stack, 'Domain', {
+          domainName: 'foo.com',
+          certificate: acm.Certificate.fromCertificateArn(stack, 'cert', 'arn:aws:acm:us-east-1:1111111:certificate/11-3336f1-44483d-adc7-9cd375c5169d'),
+          endpointType: apigw.EndpointType.EDGE,
+          mapping: api,
+          basePath: 'v1/api',
+        });
+      }).toThrow(/multi-level basePath is only supported when endpointType is EndpointType.REGIONAL/);
+    });
+
+    test('throws if securityPolicy is not TLS_1_2', () => {
+      // GIVEN
+      const stack = new Stack();
+      const api = new apigw.RestApi(stack, 'api');
+      api.root.addMethod('GET');
+
+      // THEN
+      expect(() => {
+        new apigw.DomainName(stack, 'Domain', {
+          domainName: 'foo.com',
+          certificate: acm.Certificate.fromCertificateArn(stack, 'cert', 'arn:aws:acm:us-east-1:1111111:certificate/11-3336f1-44483d-adc7-9cd375c5169d'),
+          mapping: api,
+          basePath: 'v1/api',
+          securityPolicy: apigw.SecurityPolicy.TLS_1_0,
+        });
+      }).toThrow(/securityPolicy must be set to TLS_1_2 if multi-level basePath is provided/);
+    });
+
+    test('can use addApiMapping', () => {
+      // GIVEN
+      const stack = new Stack();
+      const api = new apigw.RestApi(stack, 'api');
+      api.root.addMethod('GET');
+
+      // WHEN
+      const domain = new apigw.DomainName(stack, 'Domain', {
+        domainName: 'foo.com',
+        certificate: acm.Certificate.fromCertificateArn(stack, 'cert', 'arn:aws:acm:us-east-1:1111111:certificate/11-3336f1-44483d-adc7-9cd375c5169d'),
+      });
+      domain.addApiMapping(api.deploymentStage);
+      domain.addApiMapping(api.deploymentStage, { basePath: '//' });
+      domain.addApiMapping(api.deploymentStage, {
+        basePath: 'v1/my-api',
+      });
+      domain.addApiMapping(api.deploymentStage, {
+        basePath: 'v1//my-api',
+      });
+
+      // THEN
+      Template.fromStack(stack).hasResourceProperties('AWS::ApiGatewayV2::ApiMapping', {
+        'DomainName': {
+          'Ref': 'Domain66AC69E0',
+        },
+        'ApiId': {
+          'Ref': 'apiC8550315',
+        },
+        'Stage': {
+          'Ref': 'apiDeploymentStageprod896C8101',
+        },
+      });
+      Template.fromStack(stack).hasResourceProperties('AWS::ApiGatewayV2::ApiMapping', {
+        'DomainName': {
+          'Ref': 'Domain66AC69E0',
+        },
+        'ApiId': {
+          'Ref': 'apiC8550315',
+        },
+        'Stage': {
+          'Ref': 'apiDeploymentStageprod896C8101',
+        },
+        'ApiMappingKey': '//',
+      });
+      Template.fromStack(stack).hasResourceProperties('AWS::ApiGatewayV2::ApiMapping', {
+        'DomainName': {
+          'Ref': 'Domain66AC69E0',
+        },
+        'ApiId': {
+          'Ref': 'apiC8550315',
+        },
+        'Stage': {
+          'Ref': 'apiDeploymentStageprod896C8101',
+        },
+        'ApiMappingKey': 'v1/my-api',
+      });
+      Template.fromStack(stack).hasResourceProperties('AWS::ApiGatewayV2::ApiMapping', {
+        'DomainName': {
+          'Ref': 'Domain66AC69E0',
+        },
+        'ApiId': {
+          'Ref': 'apiC8550315',
+        },
+        'Stage': {
+          'Ref': 'apiDeploymentStageprod896C8101',
+        },
+        'ApiMappingKey': 'v1//my-api',
+      });
+    });
+
+    test('can use addDomainName', () => {
+      // GIVEN
+      const stack = new Stack();
+      const api = new apigw.RestApi(stack, 'api');
+      api.root.addMethod('GET');
+
+      const domain = api.addDomainName('Domain', {
+        domainName: 'foo.com',
+        certificate: acm.Certificate.fromCertificateArn(stack, 'cert', 'arn:aws:acm:us-east-1:1111111:certificate/11-3336f1-44483d-adc7-9cd375c5169d'),
+      });
+
+      // WHEN
+      domain.addApiMapping(api.deploymentStage, {
+        basePath: 'v1/my-api',
+      });
+
+      // THEN
+      Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
+        'DomainName': {
+          'Ref': 'apiDomain6D60CEFD',
+        },
+        'RestApiId': {
+          'Ref': 'apiC8550315',
+        },
+        'Stage': {
+          'Ref': 'apiDeploymentStageprod896C8101',
+        },
+      });
+      Template.fromStack(stack).hasResourceProperties('AWS::ApiGatewayV2::ApiMapping', {
+        'DomainName': {
+          'Ref': 'apiDomain6D60CEFD',
+        },
+        'ApiId': {
+          'Ref': 'apiC8550315',
+        },
+        'Stage': {
+          'Ref': 'apiDeploymentStageprod896C8101',
+        },
+        'ApiMappingKey': 'v1/my-api',
+      });
+    });
+
+    test('throws if addBasePathMapping tries to add a mapping for a path that is already mapped', () => {
+      // GIVEN
+      const stack = new Stack();
+      const api = new apigw.RestApi(stack, 'api');
+      api.root.addMethod('GET');
+
+      // WHEN
+      const domain = new apigw.DomainName(stack, 'Domain', {
+        domainName: 'foo.com',
+        certificate: acm.Certificate.fromCertificateArn(stack, 'cert', 'arn:aws:acm:us-east-1:1111111:certificate/11-3336f1-44483d-adc7-9cd375c5169d'),
+        mapping: api,
+        basePath: 'v1/path',
+      });
+
+      // THEN
+      expect(() => {
+        domain.addApiMapping(api.deploymentStage, {
+          basePath: 'v1/path',
+        });
+      }).toThrow(/DomainName Domain already has a mapping for path v1\/path/);
+    });
+
   });
 
   test('"addBasePathMapping" can be used to add base path mapping to the domain', () => {
@@ -156,7 +358,7 @@ describe('domains', () => {
     domain.addBasePathMapping(api2, { basePath: 'api2' });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'DomainName': {
         'Ref': 'mydomain592C948B',
       },
@@ -169,7 +371,7 @@ describe('domains', () => {
       },
     });
 
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'DomainName': {
         'Ref': 'mydomain592C948B',
       },
@@ -197,7 +399,7 @@ describe('domains', () => {
     api.root.addMethod('GET');
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'my.domain.com',
       'EndpointConfiguration': {
         'Types': [
@@ -208,7 +410,7 @@ describe('domains', () => {
         'Ref': 'cert56CA94EB',
       },
     });
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'DomainName': {
         'Ref': 'apiCustomDomain64773C4F',
       },
@@ -235,7 +437,7 @@ describe('domains', () => {
     api.addDomainName('domainId', { domainName, certificate });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': domainName,
       'EndpointConfiguration': {
         'Types': [
@@ -246,7 +448,7 @@ describe('domains', () => {
         'Ref': 'cert56CA94EB',
       },
     });
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'DomainName': {
         'Ref': 'apidomainId102F8DAA',
       },
@@ -274,7 +476,7 @@ describe('domains', () => {
     api.addDomainName('domainId', { domainName, certificate, basePath });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'BasePath': 'users',
       'RestApiId': {
         'Ref': 'apiC8550315',
@@ -300,37 +502,19 @@ describe('domains', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'BasePath': 'users',
       'RestApiId': {
         'Ref': 'apiC8550315',
       },
     });
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'BasePath': 'books',
       'RestApiId': {
         'Ref': 'apiC8550315',
       },
     });
   });
-
-  test('no additional base paths can added if addDomainName was called without a base path', () => {
-    // GIVEN
-    const domainName = 'my.domain.com';
-    const stack = new Stack();
-    const certificate = new acm.Certificate(stack, 'cert', { domainName: 'my.domain.com' });
-
-    // WHEN
-    const api = new apigw.RestApi(stack, 'api', {});
-
-    api.root.addMethod('GET');
-
-    const dn = api.addDomainName('domainId', { domainName, certificate });
-
-    expect(() => dn.addBasePathMapping(api, { basePath: 'books' }))
-      .toThrow(/No additional base paths are allowed/);
-  });
-
 
   test('domain name cannot contain uppercase letters', () => {
     // GIVEN
@@ -361,7 +545,7 @@ describe('domains', () => {
     expect(api.domainName).toEqual(domainName1);
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'my.domain.com',
       'EndpointConfiguration': {
         'Types': [
@@ -372,7 +556,7 @@ describe('domains', () => {
         'Ref': 'cert56CA94EB',
       },
     });
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'your.domain.com',
       'EndpointConfiguration': {
         'Types': [
@@ -383,7 +567,7 @@ describe('domains', () => {
         'Ref': 'cert56CA94EB',
       },
     });
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'our.domain.com',
       'EndpointConfiguration': {
         'Types': [
@@ -394,7 +578,7 @@ describe('domains', () => {
         'Ref': 'cert56CA94EB',
       },
     });
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'DomainName': {
         'Ref': 'apidomainId102F8DAA',
       },
@@ -433,7 +617,7 @@ describe('domains', () => {
     domain.addBasePathMapping(api2, { basePath: 'api2' });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'DomainName': {
         'Ref': 'mydomain592C948B',
       },
@@ -444,7 +628,7 @@ describe('domains', () => {
       'Stage': stack.resolve(testStage.stageName),
     });
 
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'DomainName': {
         'Ref': 'mydomain592C948B',
       },
@@ -471,7 +655,7 @@ describe('domains', () => {
       certificate: acm.Certificate.fromCertificateArn(stack, 'cert', 'arn:aws:acm:us-east-1:1111111:certificate/11-3336f1-44483d-adc7-9cd375c5169d'),
     });
 
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'example.com',
       'EndpointConfiguration': { 'Types': ['REGIONAL'] },
       'RegionalCertificateArn': 'arn:aws:acm:us-east-1:1111111:certificate/11-3336f1-44483d-adc7-9cd375c5169d',
@@ -492,7 +676,7 @@ describe('domains', () => {
         version: 'version',
       },
     });
-    expect(stack).toHaveResource('AWS::ApiGateway::DomainName', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::DomainName', {
       'DomainName': 'example.com',
       'EndpointConfiguration': { 'Types': ['REGIONAL'] },
       'RegionalCertificateArn': 'arn:aws:acm:us-east-1:1111111:certificate/11-3336f1-44483d-adc7-9cd375c5169d',
@@ -512,7 +696,7 @@ describe('domains', () => {
     }).root.addMethod('GET');
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'DomainName': {
         'Ref': 'restApiWithStageCustomDomainC4749625',
       },
@@ -543,7 +727,7 @@ describe('domains', () => {
     }).root.addMethod('GET');
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::BasePathMapping', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::BasePathMapping', {
       'DomainName': {
         'Ref': 'specRestApiWithStageCustomDomain8A36A5C9',
       },

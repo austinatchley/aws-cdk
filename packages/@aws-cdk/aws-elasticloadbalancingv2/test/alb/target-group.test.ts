@@ -1,4 +1,4 @@
-import '@aws-cdk/assert-internal/jest';
+import { Template } from '@aws-cdk/assertions';
 import * as ec2 from '@aws-cdk/aws-ec2';
 import { testDeprecated } from '@aws-cdk/cdk-build-tools';
 import * as cdk from '@aws-cdk/core';
@@ -38,13 +38,43 @@ describe('tests', () => {
       },
     });
 
-    expect(stack).not.toHaveResourceLike('AWS::ElasticLoadBalancingV2::TargetGroup', {
+    const matches = Template.fromStack(stack).findResources('AWS::ElasticLoadBalancingV2::TargetGroup', {
       TargetGroupAttributes: [
         {
           Key: 'stickiness.enabled',
         },
       ],
     });
+    expect(Object.keys(matches).length).toBe(0);
+  });
+
+  test('Lambda target should not have port set', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'Stack');
+
+    const tg = new elbv2.ApplicationTargetGroup(stack, 'TG2', {
+      protocol: elbv2.ApplicationProtocol.HTTPS,
+    });
+    tg.addTarget({
+      attachToApplicationTargetGroup(_targetGroup: elbv2.IApplicationTargetGroup): elbv2.LoadBalancerTargetProps {
+        return {
+          targetType: elbv2.TargetType.LAMBDA,
+          targetJson: { id: 'arn:aws:lambda:eu-west-1:123456789012:function:myFn' },
+        };
+      },
+    });
+    expect(() => app.synth()).toThrow(/port\/protocol should not be specified for Lambda targets/);
+  });
+
+  test('Lambda target should not have protocol set', () => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'Stack');
+
+    new elbv2.ApplicationTargetGroup(stack, 'TG', {
+      port: 443,
+      targetType: elbv2.TargetType.LAMBDA,
+    });
+    expect(() => app.synth()).toThrow(/port\/protocol should not be specified for Lambda targets/);
   });
 
   test('Can add self-registering target to imported TargetGroup', () => {
@@ -103,7 +133,7 @@ describe('tests', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ElasticLoadBalancingV2::TargetGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
       HealthCheckEnabled: true,
       HealthCheckIntervalSeconds: 255,
       HealthCheckPath: '/arbitrary',
@@ -130,7 +160,7 @@ describe('tests', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ElasticLoadBalancingV2::TargetGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
       TargetGroupAttributes: [
         {
           Key: 'stickiness.enabled',
@@ -162,7 +192,7 @@ describe('tests', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ElasticLoadBalancingV2::TargetGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
       TargetGroupAttributes: [
         {
           Key: 'stickiness.enabled',
@@ -197,7 +227,7 @@ describe('tests', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ElasticLoadBalancingV2::TargetGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
       TargetGroupAttributes: [
         {
           Key: 'stickiness.enabled',
@@ -233,7 +263,7 @@ describe('tests', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ElasticLoadBalancingV2::TargetGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
       ProtocolVersion: 'GRPC',
       HealthCheckEnabled: true,
       HealthCheckIntervalSeconds: 255,
@@ -498,6 +528,27 @@ describe('tests', () => {
       }).toThrow('Healthcheck interval 1 minute must be greater than the timeout 2 minutes');
     });
 
+  test('Throws validation error, when `configureHealthCheck()`protocol is undefined and `interval` is smaller than `timeout`', () => {
+    // GIVEN
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'Stack');
+    const vpc = new ec2.Vpc(stack, 'VPC', {});
+    const tg = new elbv2.ApplicationTargetGroup(stack, 'TargetGroup', {
+      vpc,
+    });
+
+    // WHEN
+    tg.configureHealthCheck({
+      interval: cdk.Duration.seconds(60),
+      timeout: cdk.Duration.seconds(120),
+    });
+
+    // THEN
+    expect(() => {
+      app.synth();
+    }).toThrow('Healthcheck interval 1 minute must be greater than the timeout 2 minute');
+  });
+
   test('imported targetGroup has targetGroupName', () => {
     // GIVEN
     const app = new cdk.App();
@@ -510,5 +561,52 @@ describe('tests', () => {
 
     // THEN
     expect(importedTg.targetGroupName).toEqual('myAlbTargetGroup');
+  });
+
+  test('imported targetGroup with imported ARN has targetGroupName', () => {
+    // GIVEN
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, 'Stack');
+
+    // WHEN
+    const importedTgArn = cdk.Fn.importValue('ImportTargetGroupArn');
+    const importedTg = elbv2.ApplicationTargetGroup.fromTargetGroupAttributes(stack, 'importedTg', {
+      targetGroupArn: importedTgArn,
+    });
+    new cdk.CfnOutput(stack, 'TargetGroupOutput', {
+      value: importedTg.targetGroupName,
+    });
+
+    // THEN
+    Template.fromStack(stack).hasOutput('TargetGroupOutput', {
+      Value: {
+        'Fn::Select': [
+          // myAlbTargetGroup
+          1,
+          {
+            'Fn::Split': [
+              // [targetgroup, myAlbTargetGroup, 73e2d6bc24d8a067]
+              '/',
+              {
+                'Fn::Select': [
+                  // targetgroup/myAlbTargetGroup/73e2d6bc24d8a067
+                  5,
+                  {
+                    'Fn::Split': [
+                      // [arn, aws, elasticloadbalancing, us-west-2, 123456789012, targetgroup/myAlbTargetGroup/73e2d6bc24d8a067]
+                      ':',
+                      {
+                        // arn:aws:elasticloadbalancing:us-west-2:123456789012:targetgroup/myAlbTargetGroup/73e2d6bc24d8a067
+                        'Fn::ImportValue': 'ImportTargetGroupArn',
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
   });
 });

@@ -1,16 +1,10 @@
-import * as crypto from 'crypto';
-
 import { AccountRootPrincipal, Grant, IGrantable } from '@aws-cdk/aws-iam';
 import { IKey, ViaServicePrincipal } from '@aws-cdk/aws-kms';
 import { IResource, Resource, Size, SizeRoundingBehavior, Stack, Token, Tags, Names, RemovalPolicy } from '@aws-cdk/core';
+import { md5hash } from '@aws-cdk/core/lib/helpers-internal';
 import { Construct } from 'constructs';
 import { CfnVolume } from './ec2.generated';
 import { IInstance } from './instance';
-
-// v2 - keep this import as a separate section to reduce merge conflict when forward merging with the v2 branch.
-// eslint-disable-next-line
-import { Construct as CoreConstruct } from '@aws-cdk/core';
-
 
 /**
  * Block device
@@ -89,6 +83,17 @@ export interface EbsDeviceOptions extends EbsDeviceOptionsBase {
    * @default false
    */
   readonly encrypted?: boolean;
+
+  /**
+   * The ARN of the AWS Key Management Service (AWS KMS) CMK used for encryption.
+   *
+   * You have to ensure that the KMS CMK has the correct permissions to be used by the service launching the ec2 instances.
+   *
+   * @see https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/EBSEncryption.html#ebs-encryption-requirements
+   *
+   * @default - If encrypted is true, the default aws/ebs KMS key will be used.
+   */
+  readonly kmsKey?: IKey;
 }
 
 /**
@@ -108,7 +113,7 @@ export interface EbsDeviceSnapshotOptions extends EbsDeviceOptionsBase {
 /**
  * Properties of an EBS block device
  */
-export interface EbsDeviceProps extends EbsDeviceSnapshotOptions {
+export interface EbsDeviceProps extends EbsDeviceSnapshotOptions, EbsDeviceOptions {
   /**
    * The snapshot ID of the volume to use
    *
@@ -437,6 +442,14 @@ export interface VolumeProps {
    * @default RemovalPolicy.RETAIN
    */
   readonly removalPolicy?: RemovalPolicy;
+
+  /**
+   * The throughput that the volume supports, in MiB/s
+   * Takes a minimum of 125 and maximum of 1000.
+   * @see https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-ebs-volume.html#cfn-ec2-ebs-volume-throughput
+   * @default - 125 MiB/s. Only valid on gp3 volumes.
+   */
+  readonly throughput?: number;
 }
 
 /**
@@ -510,7 +523,7 @@ abstract class VolumeBase extends Resource implements IVolume {
     // The ResourceTag condition requires that all resources involved in the operation have
     // the given tag, so we tag this and all constructs given.
     Tags.of(this).add(tagKey, tagValue);
-    constructs.forEach(construct => Tags.of(construct as CoreConstruct).add(tagKey, tagValue));
+    constructs.forEach(construct => Tags.of(construct).add(tagKey, tagValue));
 
     return result;
   }
@@ -539,7 +552,7 @@ abstract class VolumeBase extends Resource implements IVolume {
     // The ResourceTag condition requires that all resources involved in the operation have
     // the given tag, so we tag this and all constructs given.
     Tags.of(this).add(tagKey, tagValue);
-    constructs.forEach(construct => Tags.of(construct as CoreConstruct).add(tagKey, tagValue));
+    constructs.forEach(construct => Tags.of(construct).add(tagKey, tagValue));
 
     return result;
   }
@@ -559,9 +572,7 @@ abstract class VolumeBase extends Resource implements IVolume {
   }
 
   private calculateResourceTagValue(constructs: Construct[]): string {
-    const md5 = crypto.createHash('md5');
-    constructs.forEach(construct => md5.update(Names.uniqueId(construct)));
-    return md5.digest('hex');
+    return md5hash(constructs.map(c => Names.uniqueId(c)).join(''));
   }
 }
 
@@ -699,6 +710,17 @@ export class Volume extends VolumeBase {
       if (props.size && (props.iops > maximumRatio * props.size.toGibibytes({ rounding: SizeRoundingBehavior.FAIL }))) {
         throw new Error(`\`${volumeType}\` volumes iops has a maximum ratio of ${maximumRatio} IOPS/GiB.`);
       }
+
+      const maximumThroughputRatios: { [key: string]: number } = {};
+      maximumThroughputRatios[EbsDeviceVolumeType.GP3] = 0.25;
+      const maximumThroughputRatio = maximumThroughputRatios[volumeType];
+      if (props.throughput && props.iops) {
+        const iopsRatio = (props.throughput / props.iops);
+        if (iopsRatio > maximumThroughputRatio) {
+          throw new Error(`Throughput (MiBps) to iops ratio of ${iopsRatio} is too high; maximum is ${maximumThroughputRatio} MiBps per iops`);
+        }
+
+      }
     }
 
     if (props.enableMultiAttach) {
@@ -729,6 +751,21 @@ export class Volume extends VolumeBase {
       const { Min, Max } = sizeRanges[volumeType];
       if (size < Min || size > Max) {
         throw new Error(`\`${volumeType}\` volumes must be between ${Min} GiB and ${Max} GiB in size.`);
+      }
+    }
+
+    if (props.throughput) {
+      const throughputRange = { Min: 125, Max: 1000 };
+      const { Min, Max } = throughputRange;
+      if (props.volumeType != EbsDeviceVolumeType.GP3) {
+        throw new Error(
+          'throughput property requires volumeType: EbsDeviceVolumeType.GP3',
+        );
+      }
+      if (props.throughput < Min || props.throughput > Max) {
+        throw new Error(
+          `throughput property takes a minimum of ${Min} and a maximum of ${Max}`,
+        );
       }
     }
   }

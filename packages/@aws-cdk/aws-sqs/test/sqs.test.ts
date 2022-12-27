@@ -1,5 +1,4 @@
-import { ResourcePart } from '@aws-cdk/assert-internal';
-import '@aws-cdk/assert-internal/jest';
+import { Match, Template } from '@aws-cdk/assertions';
 import * as iam from '@aws-cdk/aws-iam';
 import * as kms from '@aws-cdk/aws-kms';
 import { CfnParameter, Duration, Stack, App, Token } from '@aws-cdk/core';
@@ -13,7 +12,7 @@ test('default properties', () => {
 
   expect(q.fifo).toEqual(false);
 
-  expect(stack).toMatchTemplate({
+  Template.fromStack(stack).templateMatches({
     'Resources': {
       'Queue4A7E3555': {
         'Type': 'AWS::SQS::Queue',
@@ -23,17 +22,18 @@ test('default properties', () => {
     },
   });
 
-  expect(stack).toHaveResource('AWS::SQS::Queue', {
+  Template.fromStack(stack).hasResource('AWS::SQS::Queue', {
     DeletionPolicy: 'Delete',
-  }, ResourcePart.CompleteDefinition);
+  });
 });
 
 test('with a dead letter queue', () => {
   const stack = new Stack();
   const dlq = new sqs.Queue(stack, 'DLQ');
-  new sqs.Queue(stack, 'Queue', { deadLetterQueue: { queue: dlq, maxReceiveCount: 3 } });
+  const dlqProps = { queue: dlq, maxReceiveCount: 3 };
+  const queue = new sqs.Queue(stack, 'Queue', { deadLetterQueue: dlqProps });
 
-  expect(stack).toMatchTemplate({
+  Template.fromStack(stack).templateMatches({
     'Resources': {
       'DLQ581697C4': {
         'Type': 'AWS::SQS::Queue',
@@ -58,6 +58,8 @@ test('with a dead letter queue', () => {
       },
     },
   });
+
+  expect(queue.deadLetterQueue).toEqual(dlqProps);
 });
 
 test('message retention period must be between 1 minute to 14 days', () => {
@@ -88,7 +90,7 @@ test('message retention period can be provided as a parameter', () => {
   });
 
   // THEN
-  expect(stack).toMatchTemplate({
+  Template.fromStack(stack).templateMatches({
     'Parameters': {
       'myretentionperiod': {
         'Type': 'Number',
@@ -119,7 +121,7 @@ test('addToPolicy will automatically create a policy for this queue', () => {
     principals: [new iam.ArnPrincipal('arn')],
   }));
 
-  expect(stack).toMatchTemplate({
+  Template.fromStack(stack).templateMatches({
     'Resources': {
       'MyQueueE6CA6235': {
         'Type': 'AWS::SQS::Queue',
@@ -320,7 +322,7 @@ describe('grants', () => {
 
     queue.grantPurge(user);
 
-    expect(stack).toHaveResource('AWS::IAM::Policy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
       'PolicyDocument': {
         'Statement': [
           {
@@ -347,7 +349,7 @@ describe('queue encryption', () => {
     const queue = new sqs.Queue(stack, 'Queue', { encryptionMasterKey: key });
 
     expect(queue.encryptionMasterKey).toEqual(key);
-    expect(stack).toHaveResource('AWS::SQS::Queue', {
+    Template.fromStack(stack).hasResourceProperties('AWS::SQS::Queue', {
       'KmsMasterKeyId': { 'Fn::GetAtt': ['CustomKey1E6D0D07', 'Arn'] },
     });
   });
@@ -357,8 +359,8 @@ describe('queue encryption', () => {
 
     new sqs.Queue(stack, 'Queue', { encryption: sqs.QueueEncryption.KMS });
 
-    expect(stack).toHaveResource('AWS::KMS::Key');
-    expect(stack).toHaveResource('AWS::SQS::Queue', {
+    Template.fromStack(stack).hasResourceProperties('AWS::KMS::Key', Match.anyValue());
+    Template.fromStack(stack).hasResourceProperties('AWS::SQS::Queue', {
       'KmsMasterKeyId': {
         'Fn::GetAtt': [
           'QueueKey39FCBAE6',
@@ -372,7 +374,7 @@ describe('queue encryption', () => {
     const stack = new Stack();
 
     new sqs.Queue(stack, 'Queue', { encryption: sqs.QueueEncryption.KMS_MANAGED });
-    expect(stack).toMatchTemplate({
+    Template.fromStack(stack).templateMatches({
       'Resources': {
         'Queue4A7E3555': {
           'Type': 'AWS::SQS::Queue',
@@ -400,7 +402,7 @@ describe('queue encryption', () => {
     queue.grantSendMessages(role);
 
     // THEN
-    expect(stack).toHaveResource('AWS::IAM::Policy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
       'PolicyDocument': {
         'Statement': [
           {
@@ -427,6 +429,99 @@ describe('queue encryption', () => {
       },
     });
   });
+
+  test('it is possible to use sqs managed server side encryption', () => {
+    const stack = new Stack();
+
+    new sqs.Queue(stack, 'Queue', { encryption: sqs.QueueEncryption.SQS_MANAGED });
+    Template.fromStack(stack).templateMatches({
+      'Resources': {
+        'Queue4A7E3555': {
+          'Type': 'AWS::SQS::Queue',
+          'Properties': {
+            'SqsManagedSseEnabled': true,
+          },
+          'UpdateReplacePolicy': 'Delete',
+          'DeletionPolicy': 'Delete',
+        },
+      },
+    });
+  });
+
+  test('it is possible to disable encryption (unencrypted)', () => {
+    const stack = new Stack();
+
+    new sqs.Queue(stack, 'Queue', { encryption: sqs.QueueEncryption.UNENCRYPTED });
+    Template.fromStack(stack).templateMatches({
+      'Resources': {
+        'Queue4A7E3555': {
+          'Type': 'AWS::SQS::Queue',
+          'Properties': {
+            'SqsManagedSseEnabled': false,
+          },
+          'UpdateReplacePolicy': 'Delete',
+          'DeletionPolicy': 'Delete',
+        },
+      },
+    });
+  });
+
+  test('encryptionMasterKey is not supported if encryption type SQS_MANAGED is used', () => {
+    // GIVEN
+    const stack = new Stack();
+    const key = new kms.Key(stack, 'CustomKey');
+
+    // THEN
+    expect(() => new sqs.Queue(stack, 'Queue', {
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      encryptionMasterKey: key,
+    })).toThrow(/'encryptionMasterKey' is not supported if encryption type 'SQS_MANAGED' is used/);
+  });
+});
+
+describe('encryption in transit', () => {
+  test('enforceSSL can be enabled', () => {
+    const stack = new Stack();
+    new sqs.Queue(stack, 'Queue', { enforceSSL: true });
+
+    Template.fromStack(stack).templateMatches({
+      'Resources': {
+        'Queue4A7E3555': {
+          'Type': 'AWS::SQS::Queue',
+          'UpdateReplacePolicy': 'Delete',
+          'DeletionPolicy': 'Delete',
+        },
+        'QueuePolicy25439813': {
+          'Type': 'AWS::SQS::QueuePolicy',
+          'Properties': {
+            'PolicyDocument': {
+              'Statement': [
+                {
+                  'Action': 'sqs:*',
+                  'Condition': {
+                    'Bool': {
+                      'aws:SecureTransport': 'false',
+                    },
+                  },
+                  'Effect': 'Deny',
+                  'Principal': {
+                    'AWS': '*',
+                  },
+                  'Resource': {
+                    'Fn::GetAtt': [
+                      'Queue4A7E3555',
+                      'Arn',
+                    ],
+                  },
+                },
+              ],
+              'Version': '2012-10-17',
+            },
+          },
+        },
+      },
+    });
+  });
 });
 
 test('test ".fifo" suffixed queues register as fifo', () => {
@@ -437,7 +532,7 @@ test('test ".fifo" suffixed queues register as fifo', () => {
 
   expect(queue.fifo).toEqual(true);
 
-  expect(stack).toMatchTemplate({
+  Template.fromStack(stack).templateMatches({
     'Resources': {
       'Queue4A7E3555': {
         'Type': 'AWS::SQS::Queue',
@@ -460,7 +555,7 @@ test('test a fifo queue is observed when the "fifo" property is specified', () =
 
   expect(queue.fifo).toEqual(true);
 
-  expect(stack).toMatchTemplate({
+  Template.fromStack(stack).templateMatches({
     'Resources': {
       'Queue4A7E3555': {
         'Type': 'AWS::SQS::Queue',
@@ -483,7 +578,7 @@ test('test a fifo queue is observed when high throughput properties are specifie
   });
 
   expect(queue.fifo).toEqual(true);
-  expect(stack).toMatchTemplate({
+  Template.fromStack(stack).templateMatches({
     'Resources': {
       'Queue4A7E3555': {
         'Type': 'AWS::SQS::Queue',
@@ -581,7 +676,7 @@ function testGrant(action: (q: sqs.Queue, principal: iam.IPrincipal) => void, ..
 
   action(queue, principal);
 
-  expect(stack).toHaveResource('AWS::IAM::Policy', {
+  Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
     'PolicyDocument': {
       'Statement': [
         {

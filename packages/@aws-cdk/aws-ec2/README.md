@@ -42,10 +42,11 @@ distinguishes three different subnet types:
   Internet Gateway. If you want your instances to have a public IP address
   and be directly reachable from the Internet, you must place them in a
   public subnet.
-* **Private with Internet Access (`SubnetType.PRIVATE_WITH_NAT`)** - instances in private subnets are not directly routable from the
-  Internet, and connect out to the Internet via a NAT gateway. By default, a
-  NAT gateway is created in every public subnet for maximum availability. Be
+* **Private with Internet Access (`SubnetType.PRIVATE_WITH_EGRESS`)** - instances in private subnets are not directly routable from the
+  Internet, and you must provide a way to connect out to the Internet.
+  By default, a NAT gateway is created in every public subnet for maximum availability. Be
   aware that you will be charged for NAT gateways.
+  Alternatively you can set `natGateways:0` and provide your own egress configuration (i.e through Transit Gateway)
 * **Isolated (`SubnetType.PRIVATE_ISOLATED`)** - isolated subnets do not route from or to the Internet, and
   as such do not require NAT gateways. They can only connect to or be
   connected to from other instances in the same VPC. A default VPC configuration
@@ -91,7 +92,7 @@ itself to 2 Availability Zones.
 Therefore, to get the VPC to spread over 3 or more availability zones, you
 must specify the environment where the stack will be deployed.
 
-You can gain full control over the availability zones selection strategy by overriding the Stack's [`get availabilityZones()`](https://github.com/aws/aws-cdk/blob/master/packages/@aws-cdk/core/lib/stack.ts) method:
+You can gain full control over the availability zones selection strategy by overriding the Stack's [`get availabilityZones()`](https://github.com/aws/aws-cdk/blob/main/packages/@aws-cdk/core/lib/stack.ts) method:
 
 ```text
 // This example is only available in TypeScript
@@ -131,7 +132,7 @@ new ec2.InterfaceVpcEndpoint(this, 'VPC Endpoint', {
   vpc,
   service: new ec2.InterfaceVpcEndpointService('com.amazonaws.vpce.us-east-1.vpce-svc-uuddlrlrbastrtsvc', 443),
   subnets: {
-    subnetType: ec2.SubnetType.ISOLATED,
+    subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
     availabilityZones: ['us-east-1a', 'us-east-1c']
   }
 });
@@ -199,21 +200,103 @@ MachineImage.genericLinux({ ... })` and configure the right AMI ID for the
 regions you want to deploy to.
 
 By default, the NAT instances will route all traffic. To control what traffic
-gets routed, pass `allowAllTraffic: false` and access the
-`NatInstanceProvider.connections` member after having passed it to the VPC:
+gets routed, pass a custom value for `defaultAllowedTraffic` and access the
+`NatInstanceProvider.connections` member after having passed the NAT provider to
+the VPC:
 
 ```ts
 declare const instanceType: ec2.InstanceType;
 
 const provider = ec2.NatProvider.instance({
   instanceType,
-  allowAllTraffic: false,
+  defaultAllowedTraffic: ec2.NatTrafficDirection.OUTBOUND_ONLY,
 });
 new ec2.Vpc(this, 'TheVPC', {
   natGatewayProvider: provider,
 });
 provider.connections.allowFrom(ec2.Peer.ipv4('1.2.3.4/8'), ec2.Port.tcp(80));
 ```
+
+### Ip Address Management
+
+The VPC spans a supernet IP range, which contains the non-overlapping IPs of its contained subnets. Possible sources for this IP range are:
+
+* You specify an IP range directly by specifying a CIDR
+* You allocate an IP range of a given size automatically from AWS IPAM
+
+By default the Vpc will allocate the `10.0.0.0/16` address range which will be exhaustively spread across all subnets in the subnet configuration. This behavior can be changed by passing an object that implements `IIpAddresses` to the `ipAddress` property of a Vpc. See the subsequent sections for the options.
+
+Be aware that if you don't explicitly reserve subnet groups in `subnetConfiguration`, the address space will be fully allocated! If you predict you may need to add more subnet groups later, add them early on and set `reserved: true` (see the "Advanced Subnet Configuration" section for more information).
+
+#### Specifying a CIDR directly
+
+Use `IpAddresses.cidr` to define a Cidr range for your Vpc directly in code:
+
+```ts
+import { IpAddresses } from '@aws-cdk/aws-ec2';
+
+new ec2.Vpc(stack, 'TheVPC', {
+  ipAddresses: ec2.IpAddresses.cidr('10.0.1.0/20')
+});
+```
+
+Space will be allocated to subnets in the following order:
+
+* First, spaces is allocated for all subnets groups that explicitly have a `cidrMask` set as part of their configuration (including reserved subnets).
+* Afterwards, any remaining space is divided evenly between the rest of the subnets (if any).
+
+The argument to `IpAddresses.cidr` may not be a token, and concrete Cidr values are generated in the synthesized CloudFormation template.
+
+#### Allocating an IP range from AWS IPAM
+
+Amazon VPC IP Address Manager (IPAM) manages a large IP space, from which chunks can be allocated for use in the Vpc. For information on Amazon VPC IP Address Manager please see the [official documentation](https://docs.aws.amazon.com/vpc/latest/ipam/what-it-is-ipam.html). An example of allocating from AWS IPAM looks like this:
+
+```ts
+import { IpAddresses } from '@aws-cdk/aws-ec2';
+
+declare const pool: ec2.CfnIPAMPool;
+
+new ec2.Vpc(stack, 'TheVPC', {
+  ipAddresses: ec2.IpAddresses.awsIpamAllocation({
+    ipv4IpamPoolId: pool.ref,
+    ipv4NetmaskLength: 18,
+    defaultSubnetIpv4NetmaskLength: 24
+  })
+});
+```
+
+`IpAddresses.awsIpamAllocation` requires the following:
+
+* `ipv4IpamPoolId`, the id of an IPAM Pool from which the VPC range should be allocated.
+* `ipv4NetmaskLength`, the size of the IP range that will be requested from the Pool at deploy time.
+* `defaultSubnetIpv4NetmaskLength`, the size of subnets in groups that don't have `cidrMask` set.
+
+With this method of IP address management, no attempt is made to guess at subnet group sizes or to exhaustively allocate the IP range. All subnet groups must have an explicit `cidrMask` set as part of their subnet configuration, or `defaultSubnetIpv4NetmaskLength` must be set for a default size. If not, synthesis will fail and you must provide one or the other.
+
+### Reserving availability zones
+
+There are situations where the IP space for availability zones will
+need to be reserved. This is useful in situations where availability
+zones would need to be added after the vpc is originally deployed,
+without causing IP renumbering for availability zones subnets. The IP
+space for reserving `n` availability zones can be done by setting the
+`reservedAzs` to `n` in vpc props, as shown below:
+
+```ts
+const vpc = new ec2.Vpc(this, 'TheVPC', {
+  cidr: '10.0.0.0/21',
+  maxAzs: 3,
+  reservedAzs: 1,
+});
+```
+
+In the example above, the subnets for reserved availability zones is not
+actually provisioned but its IP space is still reserved. If, in the future,
+new availability zones needs to be provisioned, then we would decrement
+the value of `reservedAzs` and increment the `maxAzs` or `availabilityZones`
+accordingly. This action would not cause the IP address of subnets to get
+renumbered, but rather the IP space that was previously reserved will be
+used for the new availability zones subnets.
 
 ### Advanced Subnet Configuration
 
@@ -225,11 +308,13 @@ subnet configuration could look like this:
 
 ```ts
 const vpc = new ec2.Vpc(this, 'TheVPC', {
-  // 'cidr' configures the IP range and size of the entire VPC.
-  // The IP space will be divided over the configured subnets.
-  cidr: '10.0.0.0/21',
+  // 'IpAddresses' configures the IP range and size of the entire VPC.
+  // The IP space will be divided based on configuration for the subnets.
+  ipAddresses: IpAddresses.cidr('10.0.0.0/21'),
 
-  // 'maxAzs' configures the maximum number of availability zones to use
+  // 'maxAzs' configures the maximum number of availability zones to use.
+  // If you want to specify the exact availability zones you want the VPC
+  // to use, use `availabilityZones` instead.
   maxAzs: 3,
 
   // 'subnetConfiguration' specifies the "subnet groups" to create.
@@ -257,7 +342,7 @@ const vpc = new ec2.Vpc(this, 'TheVPC', {
     {
       cidrMask: 24,
       name: 'Application',
-      subnetType: ec2.SubnetType.PRIVATE_WITH_NAT,
+      subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
     },
     {
       cidrMask: 28,
@@ -324,7 +409,7 @@ const vpc = new ec2.Vpc(this, "VPC", {
       subnetType: ec2.SubnetType.PUBLIC,
       name: 'Public',
     },{
-      subnetType: ec2.SubnetType.ISOLATED,
+      subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
       name: 'Isolated',
     }]
 });
@@ -360,18 +445,18 @@ const vpc = new ec2.Vpc(this, 'TheVPC', {
     {
       cidrMask: 26,
       name: 'Application1',
-      subnetType: ec2.SubnetType.PRIVATE_WITH_NAT,
+      subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
     },
     {
       cidrMask: 26,
       name: 'Application2',
-      subnetType: ec2.SubnetType.PRIVATE_WITH_NAT,
+      subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       reserved: true,   // <---- This subnet group is reserved
     },
     {
       cidrMask: 27,
       name: 'Database',
-      subnetType: ec2.SubnetType.ISOLATED,
+      subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
     }
   ],
 });
@@ -526,11 +611,14 @@ the connection specifier:
 ec2.Port.tcp(80)
 ec2.Port.tcpRange(60000, 65535)
 ec2.Port.allTcp()
+ec2.Port.allIcmp()
+ec2.Port.allIcmpV6()
 ec2.Port.allTraffic()
 ```
 
-> NOTE: This set is not complete yet; for example, there is no library support for ICMP at the moment.
-> However, you can write your own classes to implement those.
+> NOTE: Not all protocols have corresponding helper methods. In the absence of a helper method,
+> you can instantiate `Port` yourself with your own settings. You are also welcome to contribute
+> new helper methods.
 
 ### Default Ports
 
@@ -587,7 +675,7 @@ const sg = ec2.SecurityGroup.fromSecurityGroupId(this, 'SecurityGroupImport', 's
 });
 ```
 
-Alternatively, use lookup methods to import security groups if you do not know the ID or the configuration details. Method `SecurityGroup.fromLookupByName` looks up a security group if the secruity group ID is unknown.
+Alternatively, use lookup methods to import security groups if you do not know the ID or the configuration details. Method `SecurityGroup.fromLookupByName` looks up a security group if the security group ID is unknown.
 
 ```ts fixture=with-vpc
 const sg = ec2.SecurityGroup.fromLookupByName(this, 'SecurityGroupLookup', 'security-group-name', vpc);
@@ -600,6 +688,73 @@ const sg = ec2.SecurityGroup.fromLookupById(this, 'SecurityGroupLookup', 'sg-123
 ```
 
 The result of `SecurityGroup.fromLookupByName` and `SecurityGroup.fromLookupById` operations will be written to a file called `cdk.context.json`. You must commit this file to source control so that the lookup values are available in non-privileged environments such as CI build steps, and to ensure your template builds are repeatable.
+
+### Cross Stack Connections
+
+If you are attempting to add a connection from a peer in one stack to a peer in a different stack, sometimes it is necessary to ensure that you are making the connection in
+a specific stack in order to avoid a cyclic reference. If there are no other dependencies between stacks then it will not matter in which stack you make
+the connection, but if there are existing dependencies (i.e. stack1 already depends on stack2), then it is important to make the connection in the dependent stack (i.e. stack1).
+
+Whenever you make a `connections` function call, the ingress and egress security group rules will be added to the stack that the calling object exists in.
+So if you are doing something like `peer1.connections.allowFrom(peer2)`, then the security group rules (both ingress and egress) will be created in `peer1`'s Stack.
+
+As an example, if we wanted to allow a connection from a security group in one stack (egress) to a security group in a different stack (ingress),
+we would make the connection like:
+
+**If Stack1 depends on Stack2**
+
+```ts fixture=with-vpc
+// Stack 1
+declare const stack1: Stack;
+declare const stack2: Stack;
+
+const sg1 = new ec2.SecurityGroup(stack1, 'SG1', {
+  allowAllOutbound: false, // if this is `true` then no egress rule will be created
+  vpc,
+});
+
+// Stack 2
+const sg2 = new ec2.SecurityGroup(stack2, 'SG2', {
+  allowAllOutbound: false, // if this is `true` then no egress rule will be created
+  vpc,
+});
+
+
+// `connections.allowTo` on `sg1` since we want the
+// rules to be created in Stack1
+sg1.connections.allowTo(sg2, ec2.Port.tcp(3333));
+```
+
+In this case both the Ingress Rule for `sg2` and the Egress Rule for `sg1` will both be created
+in `Stack 1` which avoids the cyclic reference.
+
+
+**If Stack2 depends on Stack1**
+
+```ts fixture=with-vpc
+// Stack 1
+declare const stack1: Stack;
+declare const stack2: Stack;
+
+const sg1 = new ec2.SecurityGroup(stack1, 'SG1', {
+  allowAllOutbound: false, // if this is `true` then no egress rule will be created
+  vpc,
+});
+
+// Stack 2
+const sg2 = new ec2.SecurityGroup(stack2, 'SG2', {
+  allowAllOutbound: false, // if this is `true` then no egress rule will be created
+  vpc,
+});
+
+
+// `connections.allowFrom` on `sg2` since we want the
+// rules to be created in Stack2
+sg2.connections.allowFrom(sg1, ec2.Port.tcp(3333));
+```
+
+In this case both the Ingress Rule for `sg2` and the Egress Rule for `sg1` will both be created
+in `Stack 2` which avoids the cyclic reference.
 
 ## Machine Images (AMIs)
 
@@ -663,10 +818,10 @@ vpc.addVpnConnection('Dynamic', {
 ```
 
 By default, routes will be propagated on the route tables associated with the private subnets. If no
-private subnets exists, isolated subnets are used. If no isolated subnets exists, public subnets are
+private subnets exist, isolated subnets are used. If no isolated subnets exist, public subnets are
 used. Use the `Vpc` property `vpnRoutePropagation` to customize this behavior.
 
-VPN connections expose [metrics (cloudwatch.Metric)](https://github.com/aws/aws-cdk/blob/master/packages/%40aws-cdk/aws-cloudwatch/README.md) across all tunnels in the account/region and per connection:
+VPN connections expose [metrics (cloudwatch.Metric)](https://github.com/aws/aws-cdk/blob/main/packages/%40aws-cdk/aws-cloudwatch/README.md) across all tunnels in the account/region and per connection:
 
 ```ts fixture=with-vpc
 // Across all tunnels in the account/region
@@ -810,7 +965,7 @@ The endpoint must use at least one [authentication method](https://docs.aws.amaz
 If user-based authentication is used, the [self-service portal URL](https://docs.aws.amazon.com/vpn/latest/clientvpn-user/self-service-portal.html)
 is made available via a CloudFormation output.
 
-By default, a new security group is created and logging is enabled. Moreover, a rule to
+By default, a new security group is created, and logging is enabled. Moreover, a rule to
 authorize all users to the VPC CIDR is created.
 
 To customize authorization rules, set the `authorizeAllUsersToVpcCidr` prop to `false`
@@ -854,11 +1009,61 @@ You can use the `Instance` class to start up a single EC2 instance. For producti
 you use an `AutoScalingGroup` from the `aws-autoscaling` module instead, as AutoScalingGroups will take
 care of restarting your instance if it ever fails.
 
+```ts
+declare const vpc: ec2.Vpc;
+declare const instanceType: ec2.InstanceType;
+
+// AWS Linux
+new ec2.Instance(this, 'Instance1', {
+  vpc,
+  instanceType,
+  machineImage: new ec2.AmazonLinuxImage(),
+});
+
+// AWS Linux 2
+new ec2.Instance(this, 'Instance2', {
+  vpc,
+  instanceType,
+  machineImage: new ec2.AmazonLinuxImage({
+    generation: ec2.AmazonLinuxGeneration.AMAZON_LINUX_2,
+  }),
+});
+
+// AWS Linux 2 with kernel 5.x
+new ec2.Instance(this, 'Instance3', {
+  vpc,
+  instanceType,
+  machineImage: new ec2.AmazonLinuxImage({
+    generation: ec2.AmazonLinuxGeneration.AMAZON_LINUX_2,
+    kernel: ec2.AmazonLinuxKernel.KERNEL5_X,
+  }),
+});
+
+// AWS Linux 2022
+new ec2.Instance(this, 'Instance4', {
+  vpc,
+  instanceType,
+  machineImage: new ec2.AmazonLinuxImage({
+    generation: ec2.AmazonLinuxGeneration.AMAZON_LINUX_2022,
+  }),
+});
+
+// Graviton 3 Processor
+new ec2.Instance(this, 'Instance5', {
+  vpc,
+  instanceType: ec2.InstanceType.of(ec2.InstanceClass.C7G, ec2.InstanceSize.LARGE),
+  machineImage: new ec2.AmazonLinuxImage({
+    generation: ec2.AmazonLinuxGeneration.AMAZON_LINUX_2,
+    cpuType: ec2.AmazonLinuxCpuType.ARM_64,
+  }),
+});
+```
+
 ### Configuring Instances using CloudFormation Init (cfn-init)
 
 CloudFormation Init allows you to configure your instances by writing files to them, installing software
 packages, starting services and running arbitrary commands. By default, if any of the instance setup
-commands throw an error, the deployment will fail and roll back to the previously known good state.
+commands throw an error; the deployment will fail and roll back to the previously known good state.
 The following documentation also applies to `AutoScalingGroup`s.
 
 For the full set of capabilities of this system, see the documentation for
@@ -1011,6 +1216,37 @@ new ec2.Instance(this, 'Instance', {
 
 ```
 
+It is also possible to encrypt the block devices. In this example we will create an customer managed key encrypted EBS-backed root device:
+
+```ts
+import { Key } from '@aws-cdk/aws-kms';
+
+declare const vpc: ec2.Vpc;
+declare const instanceType: ec2.InstanceType;
+declare const machineImage: ec2.IMachineImage;
+
+const kmsKey = new Key(this, 'KmsKey')
+
+new ec2.Instance(this, 'Instance', {
+  vpc,
+  instanceType,
+  machineImage,
+
+  // ...
+
+  blockDevices: [
+    {
+      deviceName: '/dev/sda1',
+      volume: ec2.BlockDeviceVolume.ebs(50, {
+        encrypted: true,
+        kmsKey: kmsKey,
+      }),
+    },
+  ],
+});
+
+```
+
 ### Volumes
 
 Whereas a `BlockDeviceVolume` is an EBS volume that is created and destroyed as part of the creation and destruction of a specific instance. A `Volume` is for when you want an EBS volume separate from any particular instance. A `Volume` is an EBS block device that can be attached to, or detached from, any instance at any time. Some types of `Volume`s can also be attached to multiple instances at the same time to allow you to have shared storage between those instances.
@@ -1090,6 +1326,19 @@ You can configure [tag propagation on volume creation](https://docs.aws.amazon.c
   });
 ```
 
+#### Throughput on GP3 Volumes
+
+You can specify the `throughput` of a GP3 volume from 125 (default) to 1000.
+
+```ts
+new ec2.Volume(this, 'Volume', {
+  availabilityZone: 'us-east-1a',
+  size: cdk.Size.gibibytes(125),
+  volumeType: EbsDeviceVolumeType.GP3,
+  throughput: 125,
+});
+```
+
 ### Configuring Instance Metadata Service (IMDS)
 
 #### Toggling IMDSv1
@@ -1130,7 +1379,7 @@ Aspects.of(this).add(aspect);
 
 VPC Flow Logs is a feature that enables you to capture information about the IP traffic going to and from network interfaces in your VPC. Flow log data can be published to Amazon CloudWatch Logs and Amazon S3. After you've created a flow log, you can retrieve and view its data in the chosen destination. (<https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html>).
 
-By default a flow log will be created with CloudWatch Logs as the destination.
+By default, a flow log will be created with CloudWatch Logs as the destination.
 
 You can create a flow log like this:
 
@@ -1159,12 +1408,46 @@ vpc.addFlowLog('FlowLogS3', {
   destination: ec2.FlowLogDestination.toS3()
 });
 
+// Only reject traffic and interval every minute.
 vpc.addFlowLog('FlowLogCloudWatch', {
-  trafficType: ec2.FlowLogTrafficType.REJECT
+  trafficType: ec2.FlowLogTrafficType.REJECT,
+  maxAggregationInterval: FlowLogMaxAggregationInterval.ONE_MINUTE,
 });
 ```
 
-By default the CDK will create the necessary resources for the destination. For the CloudWatch Logs destination
+### Custom Formatting
+
+You can also custom format flow logs.
+
+```ts
+const vpc = new ec2.Vpc(this, 'Vpc');
+
+vpc.addFlowLog('FlowLog', {
+  logFormat: [
+    ec2.LogFormat.DST_PORT,
+    ec2.LogFormat.SRC_PORT,
+  ],
+});
+
+// If you just want to add a field to the default field
+vpc.addFlowLog('FlowLog', {
+  logFormat: [
+    ec2.LogFormat.VERSION,
+    ec2.LogFormat.ALL_DEFAULT_FIELDS,
+  ],
+});
+
+// If AWS CDK does not support the new fields
+vpc.addFlowLog('FlowLog', {
+  logFormat: [
+    ec2.LogFormat.SRC_PORT,
+    ec2.LogFormat.custom('${new-field}'),
+  ],
+});
+```
+
+
+By default, the CDK will create the necessary resources for the destination. For the CloudWatch Logs destination
 it will create a CloudWatch Logs Log Group as well as the IAM role with the necessary permissions to publish to
 the log group. In the case of an S3 destination, it will create the S3 bucket.
 
@@ -1205,6 +1488,20 @@ new ec2.FlowLog(this, 'FlowLogWithKeyPrefix', {
 });
 ```
 
+When the S3 destination is configured, AWS will automatically create an S3 bucket policy
+that allows the service to write logs to the bucket. This makes it impossible to later update
+that bucket policy. To have CDK create the bucket policy so that future updates can be made,
+the `@aws-cdk/aws-s3:createDefaultLoggingPolicy` [feature flag](https://docs.aws.amazon.com/cdk/v2/guide/featureflags.html) can be used. This can be set
+in the `cdk.json` file.
+
+```json
+{
+  "context": {
+    "@aws-cdk/aws-s3:createDefaultLoggingPolicy": true
+  }
+}
+```
+
 ## User Data
 
 User data enables you to run a script when your instances start up.  In order to configure these scripts you can add commands directly to the script
@@ -1233,6 +1530,21 @@ instance.userData.addExecuteFileCommand({
 asset.grantRead(instance.role);
 ```
 
+### Persisting user data
+
+By default, EC2 UserData is run once on only the first time that an instance is started. It is possible to make the
+user data script run on every start of the instance.
+
+When creating a Windows UserData you can use the `persist` option to set whether or not to add
+`<persist>true</persist>` [to the user data script](https://docs.aws.amazon.com/AWSEC2/latest/WindowsGuide/ec2-windows-user-data.html#user-data-scripts). it can be used as follows:
+
+```ts
+const windowsUserData = UserData.forWindows({ persist: true });
+```
+
+For a Linux instance, this can be accomplished by using a Multipart user data to configure cloud-config as detailed
+in: https://aws.amazon.com/premiumsupport/knowledge-center/execute-user-data-ec2/
+
 ### Multipart user data
 
 In addition, to above the `MultipartUserData` can be used to change instance startup behavior. Multipart user data are composed
@@ -1240,9 +1552,9 @@ from separate parts forming archive. The most common parts are scripts executed 
 kinds, too.
 
 The advantage of multipart archive is in flexibility when it's needed to add additional parts or to use specialized parts to
-fine tune instance startup. Some services (like AWS Batch) supports only `MultipartUserData`.
+fine tune instance startup. Some services (like AWS Batch) support only `MultipartUserData`.
 
-The parts can be executed at different moment of instance start-up and can serve a different purposes. This is controlled by `contentType` property.
+The parts can be executed at different moment of instance start-up and can serve a different purpose. This is controlled by `contentType` property.
 For common scripts, `text/x-shellscript; charset="utf-8"` can be used as content type.
 
 In order to create archive the `MultipartUserData` has to be instantiated. Than, user can add parts to multipart archive using `addPart`. The `MultipartBody` contains methods supporting creation of body parts.
@@ -1280,7 +1592,7 @@ For more information see
 #### Using add*Command on MultipartUserData
 
 To use the `add*Command` methods, that are inherited from the `UserData` interface, on `MultipartUserData` you must add a part
-to the `MultipartUserData` and designate it as the reciever for these methods. This is accomplished by using the `addUserDataPart()`
+to the `MultipartUserData` and designate it as the receiver for these methods. This is accomplished by using the `addUserDataPart()`
 method on `MultipartUserData` with the `makeDefault` argument set to `true`:
 
 ```ts
@@ -1335,5 +1647,33 @@ const template = new ec2.LaunchTemplate(this, 'LaunchTemplate', {
   securityGroup: new ec2.SecurityGroup(this, 'LaunchTemplateSG', {
     vpc: vpc,
   }),
+});
+```
+
+And the following demonstrates how to enable metadata options support.
+
+```ts
+new ec2.LaunchTemplate(this, 'LaunchTemplate', {
+  httpEndpoint: true,
+  httpProtocolIpv6: true,
+  httpPutResponseHopLimit: 1,
+  httpTokens: ec2.LaunchTemplateHttpTokens.REQUIRED,
+  instanceMetadataTags: true,
+});
+```
+
+## Detailed Monitoring
+
+The following demonstrates how to enable [Detailed Monitoring](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-cloudwatch-new.html) for an EC2 instance. Keep in mind that Detailed Monitoring results in [additional charges](http://aws.amazon.com/cloudwatch/pricing/).
+
+```ts
+declare const vpc: ec2.Vpc;
+declare const instanceType: ec2.InstanceType;
+
+new ec2.Instance(this, 'Instance1', {
+  vpc,
+  instanceType,
+  machineImage: new ec2.AmazonLinuxImage(),
+  detailedMonitoring: true,
 });
 ```

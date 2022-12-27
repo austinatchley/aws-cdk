@@ -6,8 +6,8 @@ import { IManagedPolicy } from './managed-policy';
 import { Policy } from './policy';
 import { PolicyStatement } from './policy-statement';
 import { AddToPrincipalPolicyResult, ArnPrincipal, IPrincipal, PrincipalPolicyFragment } from './principals';
+import { AttachedPolicies } from './private/util';
 import { IUser } from './user';
-import { AttachedPolicies } from './util';
 
 /**
  * Represents an IAM Group.
@@ -197,7 +197,8 @@ export class Group extends GroupBase {
       region: '', // IAM is global in each partition
       service: 'iam',
       resource: 'group',
-      resourceName: this.physicalName,
+      // Removes leading slash from path
+      resourceName: `${props.path ? props.path.substr(props.path.charAt(0) === '/' ? 1 : 0) : ''}${this.physicalName}`,
     });
   }
 

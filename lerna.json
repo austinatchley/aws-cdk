@@ -6,11 +6,10 @@
     "packages/*",
     "packages/@aws-cdk/*",
     "packages/@aws-cdk-containers/*",
-    "packages/@monocdk-experiment/*",
     "packages/@aws-cdk/*/lambda-packages/*",
     "tools/*",
     "tools/@aws-cdk/*",
-    "scripts/script-tests",
+    "scripts/@aws-cdk/script-tests",
     "packages/individual-packages/*"
   ],
   "rejectCycles": "true",

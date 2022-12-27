@@ -1,11 +1,11 @@
-import '@aws-cdk/assert-internal/jest';
+import { Template } from '@aws-cdk/assertions';
 import * as autoscaling from '@aws-cdk/aws-autoscaling';
 import * as ec2 from '@aws-cdk/aws-ec2';
 import * as elbv2 from '@aws-cdk/aws-elasticloadbalancingv2';
 import * as cloudmap from '@aws-cdk/aws-servicediscovery';
 import * as cdk from '@aws-cdk/core';
 import * as ecs from '../../lib';
-import { LaunchType } from '../../lib/base/base-service';
+import { DeploymentControllerType, LaunchType } from '../../lib/base/base-service';
 import { addDefaultCapacityProvider } from '../util';
 
 describe('external service', () => {
@@ -29,7 +29,7 @@ describe('external service', () => {
       });
 
       // THEN
-      expect(stack).toHaveResource('AWS::ECS::Service', {
+      Template.fromStack(stack).hasResourceProperties('AWS::ECS::Service', {
         TaskDefinition: {
           Ref: 'ExternalTaskDef6CCBDB87',
         },
@@ -79,7 +79,7 @@ describe('external service', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ECS::Service', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ECS::Service', {
       TaskDefinition: {
         Ref: 'ExternalTaskDef6CCBDB87',
       },
@@ -165,7 +165,7 @@ describe('external service', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ECS::Service', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ECS::Service', {
       TaskDefinition: {
         Ref: 'ExternalTaskDef6CCBDB87',
       },
@@ -177,7 +177,7 @@ describe('external service', () => {
       ServiceName: 'bonjour',
     });
 
-    expect(stack).toHaveResource('AWS::EC2::SecurityGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::EC2::SecurityGroup', {
       GroupDescription: 'Example',
       GroupName: 'Bingo',
       SecurityGroupEgress: [
@@ -189,7 +189,7 @@ describe('external service', () => {
       ],
     });
 
-    expect(stack).toHaveResource('AWS::EC2::SecurityGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::EC2::SecurityGroup', {
       GroupDescription: 'Example',
       GroupName: 'Rolly',
       SecurityGroupEgress: [
@@ -520,7 +520,34 @@ describe('external service', () => {
       containerPort: 8000,
     })).toThrow('Cloud map service association is not supported for an external service');
 
+
+  });
+
+  test('add warning to annotations if circuitBreaker is specified with a non-ECS DeploymentControllerType', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+    const vpc = new ec2.Vpc(stack, 'MyVpc', {});
+    const cluster = new ecs.Cluster(stack, 'EcsCluster', { vpc });
+    addDefaultCapacityProvider(cluster, stack, vpc);
+    const taskDefinition = new ecs.ExternalTaskDefinition(stack, 'TaskDef');
+
+    taskDefinition.addContainer('web', {
+      image: ecs.ContainerImage.fromRegistry('amazon/amazon-ecs-sample'),
+      memoryLimitMiB: 512,
+    });
+
+    const service = new ecs.ExternalService(stack, 'ExternalService', {
+      cluster,
+      taskDefinition,
+      deploymentController: {
+        type: DeploymentControllerType.EXTERNAL,
+      },
+      circuitBreaker: { rollback: true },
+    });
+
     // THEN
+    expect(service.node.metadata[0].data).toEqual('taskDefinition and launchType are blanked out when using external deployment controller.');
+    expect(service.node.metadata[1].data).toEqual('Deployment circuit breaker requires the ECS deployment controller.');
 
   });
 });

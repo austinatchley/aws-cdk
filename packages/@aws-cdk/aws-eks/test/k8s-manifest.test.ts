@@ -1,5 +1,4 @@
-import '@aws-cdk/assert-internal/jest';
-import { SynthUtils } from '@aws-cdk/assert-internal';
+import { Template } from '@aws-cdk/assertions';
 import { CfnResource, Stack } from '@aws-cdk/core';
 import { Cluster, KubernetesManifest, KubernetesVersion, HelmChart } from '../lib';
 import { testFixtureNoVpc, testFixtureCluster } from './util';
@@ -72,10 +71,9 @@ describe('k8s manifest', () => {
       manifest,
     });
 
-    expect(stack).toHaveResource(KubernetesManifest.RESOURCE_TYPE, {
+    Template.fromStack(stack).hasResourceProperties(KubernetesManifest.RESOURCE_TYPE, {
       Manifest: JSON.stringify(manifest),
     });
-
   });
 
   test('can be added to an imported cluster with minimal config', () => {
@@ -91,13 +89,13 @@ describe('k8s manifest', () => {
     cluster.addHelmChart('helm', { chart: 'hello-world' });
 
     // THEN
-    expect(stack).toHaveResource(KubernetesManifest.RESOURCE_TYPE, {
+    Template.fromStack(stack).hasResourceProperties(KubernetesManifest.RESOURCE_TYPE, {
       Manifest: '[{"bar":2334}]',
       ClusterName: 'my-cluster-name',
       RoleArn: 'arn:aws:iam::1111111:role/iam-role-that-has-masters-access',
     });
 
-    expect(stack).toHaveResource(HelmChart.RESOURCE_TYPE, {
+    Template.fromStack(stack).hasResourceProperties(HelmChart.RESOURCE_TYPE, {
       ClusterName: 'my-cluster-name',
       RoleArn: 'arn:aws:iam::1111111:role/iam-role-that-has-masters-access',
       Release: 'myclustercharthelm78d2c26a',
@@ -105,8 +103,6 @@ describe('k8s manifest', () => {
       Namespace: 'default',
       CreateNamespace: true,
     });
-
-
   });
 
   test('default child is a CfnResource', () => {
@@ -121,7 +117,6 @@ describe('k8s manifest', () => {
   });
 
   describe('prune labels', () => {
-
     test('base case', () => {
       // GIVEN
       const { stack } = testFixtureNoVpc();
@@ -140,7 +135,7 @@ describe('k8s manifest', () => {
       });
 
       // THEN
-      expect(stack).toHaveResource(KubernetesManifest.RESOURCE_TYPE, {
+      Template.fromStack(stack).hasResourceProperties(KubernetesManifest.RESOURCE_TYPE, {
         Manifest: JSON.stringify([{
           apiVersion: 'v1beta1',
           kind: 'Foo',
@@ -152,8 +147,6 @@ describe('k8s manifest', () => {
         }]),
         PruneLabel: 'aws.cdk.eks/prune-c89a5983505f58231ac2a9a86fd82735ccf2308eac',
       });
-
-
     });
 
     test('multiple resources in the same manifest', () => {
@@ -182,7 +175,7 @@ describe('k8s manifest', () => {
       );
 
       // THEN
-      expect(stack).toHaveResource(KubernetesManifest.RESOURCE_TYPE, {
+      Template.fromStack(stack).hasResourceProperties(KubernetesManifest.RESOURCE_TYPE, {
         Manifest: JSON.stringify([
           {
             apiVersion: 'v1beta',
@@ -215,8 +208,6 @@ describe('k8s manifest', () => {
         ]),
         PruneLabel: 'aws.cdk.eks/prune-c89a5983505f58231ac2a9a86fd82735ccf2308eac',
       });
-
-
     });
 
     test('different KubernetesManifest resource use different prune labels', () => {
@@ -244,7 +235,7 @@ describe('k8s manifest', () => {
       });
 
       // THEN
-      expect(stack).toHaveResource(KubernetesManifest.RESOURCE_TYPE, {
+      Template.fromStack(stack).hasResourceProperties(KubernetesManifest.RESOURCE_TYPE, {
         Manifest: JSON.stringify([
           {
             apiVersion: 'v1beta',
@@ -259,7 +250,7 @@ describe('k8s manifest', () => {
         PruneLabel: 'aws.cdk.eks/prune-c89a5983505f58231ac2a9a86fd82735ccf2308eac',
       });
 
-      expect(stack).toHaveResource(KubernetesManifest.RESOURCE_TYPE, {
+      Template.fromStack(stack).hasResourceProperties(KubernetesManifest.RESOURCE_TYPE, {
         Manifest: JSON.stringify([
           {
             apiVersion: 'v1',
@@ -283,8 +274,6 @@ describe('k8s manifest', () => {
         ]),
         PruneLabel: 'aws.cdk.eks/prune-c8aff6ac817006dd4d644e9d99b2cdbb8c8cd036d9',
       });
-
-
     });
 
     test('ignores resources without "kind"', () => {
@@ -297,12 +286,10 @@ describe('k8s manifest', () => {
       });
 
       // THEN
-      expect(stack).toHaveResource(KubernetesManifest.RESOURCE_TYPE, {
+      Template.fromStack(stack).hasResourceProperties(KubernetesManifest.RESOURCE_TYPE, {
         Manifest: JSON.stringify([{ malformed: { resource: 'yes' } }]),
         PruneLabel: 'aws.cdk.eks/prune-c89a5983505f58231ac2a9a86fd82735ccf2308eac',
       });
-
-
     });
 
     test('ignores entries that are not objects (invalid type)', () => {
@@ -314,12 +301,10 @@ describe('k8s manifest', () => {
       cluster.addManifest('m1', ['foo']);
 
       // THEN
-      expect(stack).toHaveResource(KubernetesManifest.RESOURCE_TYPE, {
+      Template.fromStack(stack).hasResourceProperties(KubernetesManifest.RESOURCE_TYPE, {
         Manifest: JSON.stringify([['foo']]),
         PruneLabel: 'aws.cdk.eks/prune-c89a5983505f58231ac2a9a86fd82735ccf2308eac',
       });
-
-
     });
 
     test('no prune labels when "prune" is disabled', () => {
@@ -347,7 +332,7 @@ describe('k8s manifest', () => {
       });
 
       // THEN
-      const template = SynthUtils.synthesize(stack).template;
+      const template = Template.fromStack(stack).toJSON();
 
       const m1 = template.Resources.Clustermanifestm1E5FBE3C1.Properties;
       const m2 = template.Resources.m201F909C5.Properties;
@@ -369,7 +354,6 @@ describe('k8s manifest', () => {
       expect(m1.PruneLabel).toBeFalsy();
       expect(m2.PruneLabel).toBeFalsy();
       expect(m3.PruneLabel).toEqual('aws.cdk.eks/prune-c8971972440c5bb3661e468e4cb8069f7ee549414c');
-
     });
   });
 });

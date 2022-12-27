@@ -1,5 +1,4 @@
-import '@aws-cdk/assert-internal/jest';
-import { ABSENT } from '@aws-cdk/assert-internal';
+import { Template, Match } from '@aws-cdk/assertions';
 import * as codebuild from '@aws-cdk/aws-codebuild';
 import * as codepipeline from '@aws-cdk/aws-codepipeline';
 import * as ecr from '@aws-cdk/aws-ecr';
@@ -41,32 +40,33 @@ describe('ecr source action', () => {
         ],
       });
 
-      expect(stack).toHaveResourceLike('AWS::CodePipeline::Pipeline', {
-        'Stages': [
-          {
+      Template.fromStack(stack).hasResourceProperties('AWS::CodePipeline::Pipeline', {
+        'Stages': Match.arrayWith([
+          Match.objectLike({
             'Name': 'Source',
-          },
-          {
+          }),
+          Match.objectLike({
             'Name': 'Build',
-            'Actions': [
-              {
+            'Actions': Match.arrayWith([
+              Match.objectLike({
                 'Name': 'Build',
                 'Configuration': {
                   'EnvironmentVariables': '[{"name":"ImageDigest","type":"PLAINTEXT","value":"#{Source_Source_NS.ImageDigest}"}]',
                 },
-              },
-            ],
-          },
-        ],
+              }),
+            ]),
+          }),
+        ]),
       });
 
 
-      expect(stack).toHaveResourceLike('AWS::Events::Rule', {
+      Template.fromStack(stack).hasResourceProperties('AWS::Events::Rule', {
         'EventPattern': {
           'detail': {
-            'requestParameters': {
-              'imageTag': ['latest'],
-            },
+            'result': ['SUCCESS'],
+            'repository-name': ['repo'],
+            'image-tag': ['latest'],
+            'action-type': ['PUSH'],
           },
         },
       });
@@ -105,33 +105,34 @@ describe('ecr source action', () => {
         ],
       });
 
-      expect(stack).toHaveResourceLike('AWS::Events::Rule', {
+      Template.fromStack(stack).hasResourceProperties('AWS::Events::Rule', {
         'EventPattern': {
           'source': [
             'aws.ecr',
           ],
           'detail': {
-            'requestParameters': {
-              'imageTag': ABSENT,
-            },
+            'result': ['SUCCESS'],
+            'repository-name': ['repo'],
+            'image-tag': [],
+            'action-type': ['PUSH'],
           },
         },
       });
 
-      expect(stack).toHaveResourceLike('AWS::CodePipeline::Pipeline', {
-        'Stages': [
-          {
+      Template.fromStack(stack).hasResourceProperties('AWS::CodePipeline::Pipeline', {
+        'Stages': Match.arrayWith([
+          Match.objectLike({
             'Name': 'Source',
-            'Actions': [
-              {
+            'Actions': Match.arrayWith([
+              Match.objectLike({
                 'Name': 'Source',
                 'Configuration': {
-                  'ImageTag': ABSENT,
+                  'ImageTag': Match.absent(),
                 },
-              },
-            ],
-          },
-        ],
+              }),
+            ]),
+          }),
+        ]),
       });
     });
   });

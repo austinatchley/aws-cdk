@@ -1,4 +1,5 @@
 import { Lambda, StepFunctions } from 'aws-sdk';
+import { CfnEvaluationException } from '../../../lib/api/evaluate-cloudformation-template';
 import * as setup from './hotswap-test-setup';
 
 let hotswapMockSdkProvider: setup.HotswapMockSdkProvider;
@@ -8,10 +9,12 @@ let mockGetEndpointSuffix: () => string;
 
 beforeEach(() => {
   hotswapMockSdkProvider = setup.setupHotswapTests();
-  mockUpdateLambdaCode = jest.fn();
+  mockUpdateLambdaCode = jest.fn().mockReturnValue({});
   mockUpdateMachineDefinition = jest.fn();
   mockGetEndpointSuffix = jest.fn(() => 'amazonaws.com');
-  hotswapMockSdkProvider.stubLambda(mockUpdateLambdaCode);
+  hotswapMockSdkProvider.stubLambda({
+    updateFunctionCode: mockUpdateLambdaCode,
+  });
   hotswapMockSdkProvider.setUpdateStateMachineMock(mockUpdateMachineDefinition);
   hotswapMockSdkProvider.stubGetEndpointSuffix(mockGetEndpointSuffix);
 });
@@ -125,7 +128,7 @@ test('changes only to CDK::Metadata result in a noOp', async () => {
   setup.setCurrentCfnStackTemplate({
     Resources: {
       MetaData: {
-        Type: 'AWS::CDK::MetaData',
+        Type: 'AWS::CDK::Metadata',
         Properties: {
           Prop: 'old-value',
         },
@@ -314,4 +317,187 @@ test('can correctly reference AWS::URLSuffix in hotswappable changes', async () 
     .toHaveBeenCalledWith('cdk-hotswap/success-lambda-function');
   expect(hotswapMockSdkProvider.mockSdkProvider.sdk.removeCustomUserAgent)
     .toHaveBeenCalledWith('cdk-hotswap/success-lambda-function');
+});
+
+test('changing the type of a deployed resource always results in a full deployment', async () => {
+  // GIVEN
+  setup.setCurrentCfnStackTemplate({
+    Resources: {
+      SharedLogicalId: {
+        Type: 'AWS::Lambda::Function',
+        Properties: {
+          Code: {
+            S3Bucket: 'current-bucket',
+            S3Key: 'new-key',
+          },
+          FunctionName: 'my-function',
+        },
+      },
+    },
+  });
+  const cdkStackArtifact = setup.cdkStackArtifactOf({
+    template: {
+      Resources: {
+        SharedLogicalId: {
+          Type: 'AWS::StepFunctions::StateMachine',
+          Properties: {
+            DefinitionString: '{ Prop: "new-value" }',
+            StateMachineName: 'my-machine',
+          },
+        },
+      },
+    },
+  });
+
+  // WHEN
+  const deployStackResult = await hotswapMockSdkProvider.tryHotswapDeployment(cdkStackArtifact);
+
+  // THEN
+  expect(deployStackResult).toBeUndefined();
+  expect(mockUpdateMachineDefinition).not.toHaveBeenCalled();
+  expect(mockUpdateLambdaCode).not.toHaveBeenCalled();
+});
+
+test('A change to both a hotswappable resource and a stack output results in a full deployment', async () => {
+  // GIVEN
+  setup.setCurrentCfnStackTemplate({
+    Resources: {
+      Func: {
+        Type: 'AWS::Lambda::Function',
+        Properties: {
+          Code: {
+            S3Bucket: 'current-bucket',
+            S3Key: 'current-key',
+          },
+          FunctionName: 'my-function',
+        },
+        Metadata: {
+          'aws:asset:path': 'old-path',
+        },
+      },
+    },
+    Outputs: {
+      SomeOutput: {
+        Value: 'old-value',
+      },
+    },
+  });
+  const cdkStackArtifact = setup.cdkStackArtifactOf({
+    template: {
+      Resources: {
+        Func: {
+          Type: 'AWS::Lambda::Function',
+          Properties: {
+            Code: {
+              S3Bucket: 'current-bucket',
+              S3Key: 'new-key',
+            },
+            FunctionName: 'my-function',
+          },
+          Metadata: {
+            'aws:asset:path': 'new-path',
+          },
+        },
+      },
+      Outputs: {
+        SomeOutput: {
+          Value: 'new-value',
+        },
+      },
+    },
+  });
+
+  // WHEN
+  const deployStackResult = await hotswapMockSdkProvider.tryHotswapDeployment(cdkStackArtifact);
+
+  // THEN
+  expect(deployStackResult).toBeUndefined();
+  expect(mockUpdateMachineDefinition).not.toHaveBeenCalled();
+  expect(mockUpdateLambdaCode).not.toHaveBeenCalled();
+});
+
+test('Multiple CfnEvaluationException will not cause unhandled rejections', async () => {
+  // GIVEN
+  setup.setCurrentCfnStackTemplate({
+    Resources: {
+      Func1: {
+        Type: 'AWS::Lambda::Function',
+        Properties: {
+          Code: {
+            S3Bucket: 'current-bucket',
+            S3Key: 'current-key',
+          },
+          Environment: {
+            key: 'old',
+          },
+          FunctionName: 'my-function',
+        },
+        Metadata: {
+          'aws:asset:path': 'old-path',
+        },
+      },
+      Func2: {
+        Type: 'AWS::Lambda::Function',
+        Properties: {
+          Code: {
+            S3Bucket: 'current-bucket',
+            S3Key: 'current-key',
+          },
+          Environment: {
+            key: 'old',
+          },
+          FunctionName: 'my-function',
+        },
+        Metadata: {
+          'aws:asset:path': 'old-path',
+        },
+      },
+    },
+  });
+  const cdkStackArtifact = setup.cdkStackArtifactOf({
+    template: {
+      Resources: {
+        Func1: {
+          Type: 'AWS::Lambda::Function',
+          Properties: {
+            Code: {
+              S3Bucket: 'current-bucket',
+              S3Key: 'current-key',
+            },
+            Environment: {
+              key: { Ref: 'ErrorResource' },
+            },
+            FunctionName: 'my-function',
+          },
+          Metadata: {
+            'aws:asset:path': 'new-path',
+          },
+        },
+        Func2: {
+          Type: 'AWS::Lambda::Function',
+          Properties: {
+            Code: {
+              S3Bucket: 'current-bucket',
+              S3Key: 'current-key',
+            },
+            Environment: {
+              key: { Ref: 'ErrorResource' },
+            },
+            FunctionName: 'my-function',
+          },
+          Metadata: {
+            'aws:asset:path': 'new-path',
+          },
+        },
+      },
+    },
+  });
+
+  // WHEN
+  const deployStackResult = hotswapMockSdkProvider.tryHotswapDeployment(cdkStackArtifact);
+
+  // THEN
+  await expect(deployStackResult).rejects.toThrowError(CfnEvaluationException);
+  expect(mockUpdateMachineDefinition).not.toHaveBeenCalled();
+  expect(mockUpdateLambdaCode).not.toHaveBeenCalled();
 });

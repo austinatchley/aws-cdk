@@ -1,4 +1,3 @@
-import '@aws-cdk/assert-internal/jest';
 import { App, Stack, Duration } from '@aws-cdk/core';
 import * as eks from '../lib';
 import { KubernetesObjectValue } from '../lib/k8s-object-value';
@@ -6,7 +5,6 @@ import { KubernetesObjectValue } from '../lib/k8s-object-value';
 const CLUSTER_VERSION = eks.KubernetesVersion.V1_16;
 
 describe('k8s object value', () => {
-
   test('creates the correct custom resource with explicit values for all properties', () => {
     // GIVEN
     const stack = new Stack();
@@ -49,7 +47,6 @@ describe('k8s object value', () => {
     });
 
     expect(stack.resolve(attribute.value)).toEqual({ 'Fn::GetAtt': [expectedCustomResourceId, 'Value'] });
-
   });
 
   test('creates the correct custom resource with defaults', () => {
@@ -91,7 +88,5 @@ describe('k8s object value', () => {
     });
 
     expect(stack.resolve(attribute.value)).toEqual({ 'Fn::GetAtt': [expectedCustomResourceId, 'Value'] });
-
   });
-
 });

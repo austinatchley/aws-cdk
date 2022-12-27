@@ -1,5 +1,4 @@
-import '@aws-cdk/assert-internal/jest';
-import { SynthUtils } from '@aws-cdk/assert-internal';
+import { Match, Template } from '@aws-cdk/assertions';
 import * as ecr from '@aws-cdk/aws-ecr';
 import * as cdk from '@aws-cdk/core';
 import * as ecs from '../../lib';
@@ -16,10 +15,8 @@ describe('tag parameter container image', () => {
       });
 
       expect(() => {
-        SynthUtils.synthesize(stack);
+        Template.fromStack(stack);
       }).toThrow(/TagParameterContainerImage must be used in a container definition when using tagParameterName/);
-
-
     });
 
     test('throws an error when tagParameterValue() is used without binding the image', () => {
@@ -32,10 +29,8 @@ describe('tag parameter container image', () => {
       });
 
       expect(() => {
-        SynthUtils.synthesize(stack);
+        Template.fromStack(stack);
       }).toThrow(/TagParameterContainerImage must be used in a container definition when using tagParameterValue/);
-
-
     });
 
     test('can be used in a cross-account manner', () => {
@@ -67,7 +62,7 @@ describe('tag parameter container image', () => {
       });
 
       // THEN
-      expect(pipelineStack).toHaveResourceLike('AWS::ECR::Repository', {
+      Template.fromStack(pipelineStack).hasResourceProperties('AWS::ECR::Repository', {
         RepositoryName: repositoryName,
         RepositoryPolicyText: {
           Statement: [{
@@ -82,55 +77,54 @@ describe('tag parameter container image', () => {
                 'Fn::Join': ['', [
                   'arn:',
                   { Ref: 'AWS::Partition' },
-                  ':iam::service-account:role/servicestackionexecutionrolee7e2d9a783a54eb795f4',
+                  ':iam::service-account:root',
                 ]],
+              },
+            },
+            Condition: {
+              StringEquals: {
+                'aws:PrincipalTag/aws-cdk:id': 'ServiceStack_c8a38b9d3ed0e8d960dd0d679c0bab1612dafa96f5',
               },
             },
           }],
         },
       });
-      expect(serviceStack).toHaveResourceLike('AWS::IAM::Role', {
-        RoleName: 'servicestackionexecutionrolee7e2d9a783a54eb795f4',
+
+      Template.fromStack(serviceStack).hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: Match.objectLike({
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: [
+                'ecr:BatchCheckLayerAvailability',
+                'ecr:GetDownloadUrlForLayer',
+                'ecr:BatchGetImage',
+              ],
+              Effect: 'Allow',
+              Resource: {
+                'Fn::Join': ['', [
+                  'arn:',
+                  { Ref: 'AWS::Partition' },
+                  `:ecr:us-west-1:pipeline-account:repository/${repositoryName}`,
+                ]],
+              },
+            }),
+            Match.objectLike({
+              Action: 'ecr:GetAuthorizationToken',
+              Effect: 'Allow',
+              Resource: '*',
+            }),
+          ]),
+        }),
       });
-      expect(serviceStack).toHaveResourceLike('AWS::ECS::TaskDefinition', {
-        ContainerDefinitions: [
+
+      Template.fromStack(serviceStack).hasResourceProperties('AWS::IAM::Role', {
+        Tags: [
           {
-            Image: {
-              'Fn::Join': ['', [
-                {
-                  'Fn::Select': [4, {
-                    'Fn::Split': [':', {
-                      'Fn::Join': ['', [
-                        'arn:',
-                        { Ref: 'AWS::Partition' },
-                        `:ecr:us-west-1:pipeline-account:repository/${repositoryName}`,
-                      ]],
-                    }],
-                  }],
-                },
-                '.dkr.ecr.',
-                {
-                  'Fn::Select': [3, {
-                    'Fn::Split': [':', {
-                      'Fn::Join': ['', [
-                        'arn:',
-                        { Ref: 'AWS::Partition' },
-                        `:ecr:us-west-1:pipeline-account:repository/${repositoryName}`,
-                      ]],
-                    }],
-                  }],
-                },
-                '.',
-                { Ref: 'AWS::URLSuffix' },
-                `/${repositoryName}:`,
-                { Ref: 'ServiceTaskDefinitionContainerImageTagParamCEC9D0BA' },
-              ]],
-            },
+            Key: 'aws-cdk:id',
+            Value: 'ServiceStack_c8a38b9d3ed0e8d960dd0d679c0bab1612dafa96f5',
           },
         ],
       });
-
-
     });
   });
 });

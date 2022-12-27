@@ -3,9 +3,12 @@ import { Stack, Stage } from '@aws-cdk/core';
 import * as fs from 'fs-extra';
 import { Match } from './match';
 import { Matcher } from './matcher';
+import { findConditions, hasCondition } from './private/conditions';
+import { checkTemplateForCyclicDependencies } from './private/cyclic';
 import { findMappings, hasMapping } from './private/mappings';
 import { findOutputs, hasOutput } from './private/outputs';
-import { countResources, findResources, hasResource, hasResourceProperties } from './private/resources';
+import { findParameters, hasParameter } from './private/parameters';
+import { allResources, allResourcesProperties, countResources, countResourcesProperties, findResources, hasResource, hasResourceProperties } from './private/resources';
 import { Template as TemplateType } from './private/template';
 
 /**
@@ -18,33 +21,42 @@ export class Template {
   /**
    * Base your assertions on the CloudFormation template synthesized by a CDK `Stack`.
    * @param stack the CDK Stack to run assertions on
+   * @param templateParsingOptions Optional param to configure template parsing behavior, such as disregarding circular
+   * dependencies.
    */
-  public static fromStack(stack: Stack): Template {
-    return new Template(toTemplate(stack));
+  public static fromStack(stack: Stack, templateParsingOptions?: TemplateParsingOptions): Template {
+    return new Template(toTemplate(stack), templateParsingOptions);
   }
 
   /**
    * Base your assertions from an existing CloudFormation template formatted as an in-memory
    * JSON object.
    * @param template the CloudFormation template formatted as a nested set of records
+   * @param templateParsingOptions Optional param to configure template parsing behavior, such as disregarding circular
+   * dependencies.
    */
-  public static fromJSON(template: { [key: string] : any }): Template {
-    return new Template(template);
+  public static fromJSON(template: { [key: string] : any }, templateParsingOptions?: TemplateParsingOptions): Template {
+    return new Template(template, templateParsingOptions);
   }
 
   /**
    * Base your assertions from an existing CloudFormation template formatted as a
    * JSON string.
    * @param template the CloudFormation template in
+   * @param templateParsingOptions Optional param to configure template parsing behavior, such as disregarding circular
+   * dependencies.
    */
-  public static fromString(template: string): Template {
-    return new Template(JSON.parse(template));
+  public static fromString(template: string, templateParsingOptions?: TemplateParsingOptions): Template {
+    return new Template(JSON.parse(template), templateParsingOptions);
   }
 
   private readonly template: TemplateType;
 
-  private constructor(template: { [key: string]: any }) {
+  private constructor(template: { [key: string]: any }, templateParsingOptions: TemplateParsingOptions = {}) {
     this.template = template as TemplateType;
+    if (!templateParsingOptions?.skipCyclicalDependenciesCheck ?? true) {
+      checkTemplateForCyclicDependencies(this.template);
+    }
   }
 
   /**
@@ -68,10 +80,24 @@ export class Template {
   }
 
   /**
+   * Assert that the given number of resources of the given type and properties exists in the
+   * CloudFormation template.
+   * @param type the resource type; ex: `AWS::S3::Bucket`
+   * @param props the 'Properties' section of the resource as should be expected in the template.
+   * @param count number of expected instances
+   */
+  public resourcePropertiesCountIs(type: string, props: any, count: number): void {
+    const counted = countResourcesProperties(this.template, type, props);
+    if (counted !== count) {
+      throw new Error(`Expected ${count} resources of type ${type} but found ${counted}`);
+    }
+  }
+
+  /**
    * Assert that a resource of the given type and properties exists in the
    * CloudFormation template.
    * By default, performs partial matching on the `Properties` key of the resource, via the
-   * `Match.objectLike()`. To configure different behavour, use other matchers in the `Match` class.
+   * `Match.objectLike()`. To configure different behavior, use other matchers in the `Match` class.
    * @param type the resource type; ex: `AWS::S3::Bucket`
    * @param props the 'Properties' section of the resource as should be expected in the template.
    */
@@ -86,9 +112,9 @@ export class Template {
    * Assert that a resource of the given type and given definition exists in the
    * CloudFormation template.
    * By default, performs partial matching on the resource, via the `Match.objectLike()`.
-   * To configure different behavour, use other matchers in the `Match` class.
+   * To configure different behavior, use other matchers in the `Match` class.
    * @param type the resource type; ex: `AWS::S3::Bucket`
-   * @param props the entire defintion of the resource as should be expected in the template.
+   * @param props the entire definition of the resource as should be expected in the template.
    */
   public hasResource(type: string, props: any): void {
     const matchError = hasResource(this.template, type, props);
@@ -109,9 +135,64 @@ export class Template {
   }
 
   /**
+   * Assert that all resources of the given type contain the given definition in the
+   * CloudFormation template.
+   * By default, performs partial matching on the resource, via the `Match.objectLike()`.
+   * To configure different behavior, use other matchers in the `Match` class.
+   * @param type the resource type; ex: `AWS::S3::Bucket`
+   * @param props the entire definition of the resources as they should be expected in the template.
+   */
+  public allResources(type: string, props: any): void {
+    const matchError = allResources(this.template, type, props);
+    if (matchError) {
+      throw new Error(matchError);
+    }
+  }
+
+  /**
+   * Assert that all resources of the given type contain the given properties
+   * CloudFormation template.
+   * By default, performs partial matching on the `Properties` key of the resource, via the
+   * `Match.objectLike()`. To configure different behavior, use other matchers in the `Match` class.
+   * @param type the resource type; ex: `AWS::S3::Bucket`
+   * @param props the 'Properties' section of the resource as should be expected in the template.
+   */
+  public allResourcesProperties(type: string, props: any): void {
+    const matchError = allResourcesProperties(this.template, type, props);
+    if (matchError) {
+      throw new Error(matchError);
+    }
+  }
+
+  /**
+   * Assert that a Parameter with the given properties exists in the CloudFormation template.
+   * By default, performs partial matching on the parameter, via the `Match.objectLike()`.
+   * To configure different behavior, use other matchers in the `Match` class.
+   * @param logicalId the name of the parameter. Provide `'*'` to match all parameters in the template.
+   * @param props the parameter as should be expected in the template.
+   */
+  public hasParameter(logicalId: string, props: any): void {
+    const matchError = hasParameter(this.template, logicalId, props);
+    if (matchError) {
+      throw new Error(matchError);
+    }
+  }
+
+  /**
+   * Get the set of matching Parameters that match the given properties in the CloudFormation template.
+   * @param logicalId the name of the parameter. Provide `'*'` to match all parameters in the template.
+   * @param props by default, matches all Parameters in the template.
+   * When a literal object is provided, performs a partial match via `Match.objectLike()`.
+   * Use the `Match` APIs to configure a different behaviour.
+   */
+  public findParameters(logicalId: string, props: any = {}): { [key: string]: { [key: string]: any } } {
+    return findParameters(this.template, logicalId, props);
+  }
+
+  /**
    * Assert that an Output with the given properties exists in the CloudFormation template.
    * By default, performs partial matching on the resource, via the `Match.objectLike()`.
-   * To configure different behavour, use other matchers in the `Match` class.
+   * To configure different behavior, use other matchers in the `Match` class.
    * @param logicalId the name of the output. Provide `'*'` to match all outputs in the template.
    * @param props the output as should be expected in the template.
    */
@@ -136,7 +217,7 @@ export class Template {
   /**
    * Assert that a Mapping with the given properties exists in the CloudFormation template.
    * By default, performs partial matching on the resource, via the `Match.objectLike()`.
-   * To configure different behavour, use other matchers in the `Match` class.
+   * To configure different behavior, use other matchers in the `Match` class.
    * @param logicalId the name of the mapping. Provide `'*'` to match all mappings in the template.
    * @param props the output as should be expected in the template.
    */
@@ -159,6 +240,31 @@ export class Template {
   }
 
   /**
+   * Assert that a Condition with the given properties exists in the CloudFormation template.
+   * By default, performs partial matching on the resource, via the `Match.objectLike()`.
+   * To configure different behavior, use other matchers in the `Match` class.
+   * @param logicalId the name of the mapping. Provide `'*'` to match all conditions in the template.
+   * @param props the output as should be expected in the template.
+   */
+  public hasCondition(logicalId: string, props: any): void {
+    const matchError = hasCondition(this.template, logicalId, props);
+    if (matchError) {
+      throw new Error(matchError);
+    }
+  }
+
+  /**
+   * Get the set of matching Conditions that match the given properties in the CloudFormation template.
+   * @param logicalId the name of the condition. Provide `'*'` to match all conditions in the template.
+   * @param props by default, matches all Conditions in the template.
+   * When a literal object is provided, performs a partial match via `Match.objectLike()`.
+   * Use the `Match` APIs to configure a different behaviour.
+   */
+  public findConditions(logicalId: string, props: any = {}): { [key: string]: { [key: string]: any } } {
+    return findConditions(this.template, logicalId, props);
+  }
+
+  /**
    * Assert that the CloudFormation template matches the given value
    * @param expected the expected CloudFormation template as key-value pairs.
    */
@@ -175,11 +281,26 @@ export class Template {
   }
 }
 
+/**
+ * Options to configure template parsing behavior, such as disregarding circular
+ * dependencies.
+ */
+export interface TemplateParsingOptions {
+  /**
+   * If set to true, will skip checking for cyclical / circular dependencies. Should be set to false other than for
+   * templates that are valid despite containing cycles, such as unprocessed transform stacks.
+   *
+   * @default false
+   */
+  readonly skipCyclicalDependenciesCheck?: boolean;
+}
+
 function toTemplate(stack: Stack): any {
   const root = stack.node.root;
   if (!Stage.isStage(root)) {
     throw new Error('unexpected: all stacks must be part of a Stage or an App');
   }
+
   const assembly = root.synth();
   if (stack.nestedStackParent) {
     // if this is a nested stack (it has a parent), then just read the template as a string

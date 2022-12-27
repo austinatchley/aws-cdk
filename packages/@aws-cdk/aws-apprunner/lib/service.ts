@@ -4,6 +4,7 @@ import * as iam from '@aws-cdk/aws-iam';
 import * as cdk from '@aws-cdk/core';
 import { Construct } from 'constructs';
 import { CfnService } from './apprunner.generated';
+import { IVpcConnector } from './vpc-connector';
 
 /**
  * The image repository types
@@ -91,15 +92,56 @@ export class Memory {
  * The code runtimes
  */
 export class Runtime {
+
+  /**
+   * CORRETTO 8
+   */
+  public static readonly CORRETTO_8 = Runtime.of('CORRETTO_8')
+
+  /**
+   * CORRETTO 11
+   */
+  public static readonly CORRETTO_11 = Runtime.of('CORRETTO_11')
+
+  /**
+   * .NET 6
+   */
+  public static readonly DOTNET_6 = Runtime.of('DOTNET_6')
+
+  /**
+   * Go 1.18
+   */
+  public static readonly GO_1 = Runtime.of('GO_1')
+
   /**
    * NodeJS 12
    */
   public static readonly NODEJS_12 = Runtime.of('NODEJS_12')
 
   /**
+   * NodeJS 14
+   */
+  public static readonly NODEJS_14 = Runtime.of('NODEJS_14')
+
+  /**
+   * NodeJS 16
+   */
+  public static readonly NODEJS_16 = Runtime.of('NODEJS_16')
+
+  /**
+   * PHP 8.1
+   */
+  public static readonly PHP_81 = Runtime.of('PHP_81')
+
+  /**
    * Python 3
    */
   public static readonly PYTHON_3 = Runtime.of('PYTHON_3')
+
+  /**
+   * Ruby 3.1
+   */
+  public static readonly RUBY_31 = Runtime.of('RUBY_31')
 
   /**
    * Other runtimes
@@ -219,8 +261,14 @@ export interface EcrProps {
   /**
    * Image tag.
    * @default - 'latest'
+   * @deprecated use `tagOrDigest`
    */
   readonly tag?: string;
+  /**
+   * Image tag or digest (digests must start with `sha256:`).
+   * @default - 'latest'
+   */
+  readonly tagOrDigest?: string;
 }
 
 /**
@@ -313,7 +361,9 @@ export class EcrSource extends Source {
     return {
       imageRepository: {
         imageConfiguration: this.props.imageConfiguration,
-        imageIdentifier: this.props.repository.repositoryUriForTag(this.props.tag || 'latest'),
+        imageIdentifier: this.props.repository.repositoryUriForTagOrDigest(
+          this.props.tagOrDigest || this.props.tag || 'latest',
+        ),
         imageRepositoryType: ImageRepositoryType.ECR,
       },
       ecrRepository: this.props.repository,
@@ -516,6 +566,13 @@ export interface ServiceProps {
    * @default - auto-generated if undefined.
    */
   readonly serviceName?: string;
+
+  /**
+   * Settings for an App Runner VPC connector to associate with the service.
+   *
+   * @default - no VPC connector, uses the DEFAULT egress type instead
+   */
+  readonly vpcConnector?: IVpcConnector;
 }
 
 /**
@@ -783,6 +840,12 @@ export class Service extends cdk.Resource {
         authenticationConfiguration: this.renderAuthenticationConfiguration(),
         imageRepository: source.imageRepository ? this.renderImageRepository() : undefined,
         codeRepository: source.codeRepository ? this.renderCodeConfiguration() : undefined,
+      },
+      networkConfiguration: {
+        egressConfiguration: {
+          egressType: this.props.vpcConnector ? 'VPC' : 'DEFAULT',
+          vpcConnectorArn: this.props.vpcConnector?.vpcConnectorArn,
+        },
       },
     });
 

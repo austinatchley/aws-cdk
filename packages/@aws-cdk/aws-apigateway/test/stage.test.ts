@@ -1,8 +1,8 @@
-import '@aws-cdk/assert-internal/jest';
-import { ResourcePart } from '@aws-cdk/assert-internal';
+import { Template } from '@aws-cdk/assertions';
 import * as logs from '@aws-cdk/aws-logs';
 import * as cdk from '@aws-cdk/core';
 import * as apigateway from '../lib';
+import { ApiDefinition } from '../lib';
 
 describe('stage', () => {
   test('minimal setup', () => {
@@ -16,7 +16,7 @@ describe('stage', () => {
     new apigateway.Stage(stack, 'my-stage', { deployment });
 
     // THEN
-    expect(stack).toMatchTemplate({
+    Template.fromStack(stack).templateMatches({
       Resources: {
         testapiD6451F70: {
           Type: 'AWS::ApiGateway::RestApi',
@@ -70,7 +70,7 @@ describe('stage', () => {
     });
   });
 
-  test('stage depends on the CloudWatch role when it exists', () => {
+  test('RestApi - stage depends on the CloudWatch role when it exists', () => {
     // GIVEN
     const stack = new cdk.Stack();
     const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: true, deploy: false });
@@ -80,9 +80,26 @@ describe('stage', () => {
     // WHEN
     new apigateway.Stage(stack, 'my-stage', { deployment });
 
-    expect(stack).toHaveResourceLike('AWS::ApiGateway::Stage', {
+    // THEN
+    Template.fromStack(stack).hasResource('AWS::ApiGateway::Stage', {
       DependsOn: ['testapiAccount9B907665'],
-    }, ResourcePart.CompleteDefinition);
+    });
+  });
+
+  test('SpecRestApi - stage depends on the CloudWatch role when it exists', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+    const api = new apigateway.SpecRestApi(stack, 'test-api', { apiDefinition: apigateway.ApiDefinition.fromInline( { foo: 'bar' }) });
+    const deployment = new apigateway.Deployment(stack, 'my-deployment', { api });
+    api.root.addMethod('GET');
+
+    // WHEN
+    new apigateway.Stage(stack, 'my-stage', { deployment });
+
+    // THEN
+    Template.fromStack(stack).hasResource('AWS::ApiGateway::Stage', {
+      DependsOn: ['testapiAccount9B907665'],
+    });
   });
 
   test('common method settings can be set at the stage level', () => {
@@ -100,7 +117,7 @@ describe('stage', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::Stage', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
       MethodSettings: [
         {
           DataTraceEnabled: false,
@@ -109,6 +126,38 @@ describe('stage', () => {
           ResourcePath: '/*',
           ThrottlingRateLimit: 12,
         },
+      ],
+    });
+  });
+
+  test('"stageResourceArn" returns the ARN for the stage', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+    const api = new apigateway.RestApi(stack, 'test-api');
+    const deployment = new apigateway.Deployment(stack, 'test-deploymnet', {
+      api,
+    });
+    api.root.addMethod('GET');
+
+    // WHEN
+    const stage = new apigateway.Stage(stack, 'test-stage', {
+      deployment,
+    });
+
+    // THEN
+    expect(stack.resolve(stage.stageArn)).toEqual({
+      'Fn::Join': [
+        '',
+        [
+          'arn:',
+          { Ref: 'AWS::Partition' },
+          ':apigateway:',
+          { Ref: 'AWS::Region' },
+          '::/restapis/',
+          { Ref: 'testapiD6451F70' },
+          '/stages/',
+          { Ref: 'teststage8788861E' },
+        ],
       ],
     });
   });
@@ -133,7 +182,7 @@ describe('stage', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::Stage', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
       MethodSettings: [
         {
           DataTraceEnabled: false,
@@ -166,7 +215,7 @@ describe('stage', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::Stage', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
       CacheClusterEnabled: true,
       CacheClusterSize: '0.5',
     });
@@ -186,7 +235,7 @@ describe('stage', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::Stage', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
       CacheClusterEnabled: true,
       CacheClusterSize: '0.5',
     });
@@ -221,7 +270,7 @@ describe('stage', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::Stage', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
       CacheClusterEnabled: true,
       CacheClusterSize: '0.5',
       MethodSettings: [
@@ -266,7 +315,7 @@ describe('stage', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::Stage', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
       AccessLogSetting: {
         DestinationArn: {
           'Fn::GetAtt': [
@@ -297,7 +346,7 @@ describe('stage', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::ApiGateway::Stage', {
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
       AccessLogSetting: {
         DestinationArn: {
           'Fn::GetAtt': [
@@ -311,58 +360,356 @@ describe('stage', () => {
     });
   });
 
-  test('fails when access log format does not contain `AccessLogFormat.contextRequestId()`', () => {
+  describe('access log check', () => {
+    test('fails when access log format does not contain `contextRequestId()` or `contextExtendedRequestId()', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+      const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false, deploy: false });
+      const deployment = new apigateway.Deployment(stack, 'my-deployment', { api });
+      api.root.addMethod('GET');
+
+      // WHEN
+      const testLogGroup = new logs.LogGroup(stack, 'LogGroup');
+      const testFormat = apigateway.AccessLogFormat.custom('');
+
+      // THEN
+      expect(() => new apigateway.Stage(stack, 'my-stage', {
+        deployment,
+        accessLogDestination: new apigateway.LogGroupLogDestination(testLogGroup),
+        accessLogFormat: testFormat,
+      })).toThrow('Access log must include either `AccessLogFormat.contextRequestId()` or `AccessLogFormat.contextExtendedRequestId()`');
+    });
+
+    test('succeeds when access log format contains `contextRequestId()`', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+      const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false, deploy: false });
+      const deployment = new apigateway.Deployment(stack, 'my-deployment', { api });
+      api.root.addMethod('GET');
+
+      // WHEN
+      const testLogGroup = new logs.LogGroup(stack, 'LogGroup');
+      const testFormat = apigateway.AccessLogFormat.custom(JSON.stringify({
+        requestId: apigateway.AccessLogField.contextRequestId(),
+      }));
+
+      // THEN
+      expect(() => new apigateway.Stage(stack, 'my-stage', {
+        deployment,
+        accessLogDestination: new apigateway.LogGroupLogDestination(testLogGroup),
+        accessLogFormat: testFormat,
+      })).not.toThrow();
+    });
+
+    test('succeeds when access log format contains `contextExtendedRequestId()`', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+      const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false, deploy: false });
+      const deployment = new apigateway.Deployment(stack, 'my-deployment', { api });
+      api.root.addMethod('GET');
+
+      // WHEN
+      const testLogGroup = new logs.LogGroup(stack, 'LogGroup');
+      const testFormat = apigateway.AccessLogFormat.custom(JSON.stringify({
+        extendedRequestId: apigateway.AccessLogField.contextExtendedRequestId(),
+      }));
+
+      // THEN
+      expect(() => new apigateway.Stage(stack, 'my-stage', {
+        deployment,
+        accessLogDestination: new apigateway.LogGroupLogDestination(testLogGroup),
+        accessLogFormat: testFormat,
+      })).not.toThrow();
+    });
+
+    test('succeeds when access log format contains both `contextRequestId()` and `contextExtendedRequestId`', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+      const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false, deploy: false });
+      const deployment = new apigateway.Deployment(stack, 'my-deployment', { api });
+      api.root.addMethod('GET');
+
+      // WHEN
+      const testLogGroup = new logs.LogGroup(stack, 'LogGroup');
+      const testFormat = apigateway.AccessLogFormat.custom(JSON.stringify({
+        requestId: apigateway.AccessLogField.contextRequestId(),
+        extendedRequestId: apigateway.AccessLogField.contextExtendedRequestId(),
+      }));
+
+      // THEN
+      expect(() => new apigateway.Stage(stack, 'my-stage', {
+        deployment,
+        accessLogDestination: new apigateway.LogGroupLogDestination(testLogGroup),
+        accessLogFormat: testFormat,
+      })).not.toThrow();
+    });
+
+    test('fails when access log format contains `contextRequestIdXxx`', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+      const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false, deploy: false });
+      const deployment = new apigateway.Deployment(stack, 'my-deployment', { api });
+      api.root.addMethod('GET');
+
+      // WHEN
+      const testLogGroup = new logs.LogGroup(stack, 'LogGroup');
+      const testFormat = apigateway.AccessLogFormat.custom(JSON.stringify({
+        requestIdXxx: '$context.requestIdXxx',
+      }));
+
+      // THEN
+      expect(() => new apigateway.Stage(stack, 'my-stage', {
+        deployment,
+        accessLogDestination: new apigateway.LogGroupLogDestination(testLogGroup),
+        accessLogFormat: testFormat,
+      })).toThrow('Access log must include either `AccessLogFormat.contextRequestId()` or `AccessLogFormat.contextExtendedRequestId()`');
+    });
+
+    test('does not fail when access log format is a token', () => {
     // GIVEN
-    const stack = new cdk.Stack();
-    const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false, deploy: false });
-    const deployment = new apigateway.Deployment(stack, 'my-deployment', { api });
-    api.root.addMethod('GET');
+      const stack = new cdk.Stack();
+      const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false, deploy: false });
+      const deployment = new apigateway.Deployment(stack, 'my-deployment', { api });
+      api.root.addMethod('GET');
 
-    // WHEN
-    const testLogGroup = new logs.LogGroup(stack, 'LogGroup');
-    const testFormat = apigateway.AccessLogFormat.custom('');
+      // WHEN
+      const testLogGroup = new logs.LogGroup(stack, 'LogGroup');
+      const testFormat = apigateway.AccessLogFormat.custom(cdk.Lazy.string({ produce: () => 'test' }));
 
-    // THEN
-    expect(() => new apigateway.Stage(stack, 'my-stage', {
-      deployment,
-      accessLogDestination: new apigateway.LogGroupLogDestination(testLogGroup),
-      accessLogFormat: testFormat,
-    })).toThrow(/Access log must include at least `AccessLogFormat.contextRequestId\(\)`/);
+      // THEN
+      expect(() => new apigateway.Stage(stack, 'my-stage', {
+        deployment,
+        accessLogDestination: new apigateway.LogGroupLogDestination(testLogGroup),
+        accessLogFormat: testFormat,
+      })).not.toThrow();
+    });
+
+    test('fails when access log destination is empty', () => {
+    // GIVEN
+      const stack = new cdk.Stack();
+      const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false, deploy: false });
+      const deployment = new apigateway.Deployment(stack, 'my-deployment', { api });
+      api.root.addMethod('GET');
+
+      // WHEN
+      const testFormat = apigateway.AccessLogFormat.jsonWithStandardFields();
+
+      // THEN
+      expect(() => new apigateway.Stage(stack, 'my-stage', {
+        deployment,
+        accessLogFormat: testFormat,
+      })).toThrow(/Access log format is specified without a destination/);
+    });
   });
 
-  test('does not fail when access log format is a token', () => {
+  test('default throttling settings', () => {
     // GIVEN
     const stack = new cdk.Stack();
-    const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false, deploy: false });
-    const deployment = new apigateway.Deployment(stack, 'my-deployment', { api });
-    api.root.addMethod('GET');
-
-    // WHEN
-    const testLogGroup = new logs.LogGroup(stack, 'LogGroup');
-    const testFormat = apigateway.AccessLogFormat.custom(cdk.Lazy.string({ produce: () => 'test' }));
+    new apigateway.SpecRestApi(stack, 'testapi', {
+      apiDefinition: ApiDefinition.fromInline({
+        openapi: '3.0.2',
+      }),
+      deployOptions: {
+        throttlingBurstLimit: 0,
+        throttlingRateLimit: 0,
+        metricsEnabled: false,
+      },
+    });
 
     // THEN
-    expect(() => new apigateway.Stage(stack, 'my-stage', {
-      deployment,
-      accessLogDestination: new apigateway.LogGroupLogDestination(testLogGroup),
-      accessLogFormat: testFormat,
-    })).not.toThrow();
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
+      MethodSettings: [{
+        DataTraceEnabled: false,
+        HttpMethod: '*',
+        ResourcePath: '/*',
+        ThrottlingBurstLimit: 0,
+        ThrottlingRateLimit: 0,
+      }],
+    });
   });
 
-  test('fails when access log destination is empty', () => {
+  test('addApiKey is supported', () => {
     // GIVEN
     const stack = new cdk.Stack();
-    const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false, deploy: false });
-    const deployment = new apigateway.Deployment(stack, 'my-deployment', { api });
+    const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false });
     api.root.addMethod('GET');
+    const stage = new apigateway.Stage(stack, 'Stage', {
+      deployment: api.latestDeployment!,
+    });
 
     // WHEN
-    const testFormat = apigateway.AccessLogFormat.jsonWithStandardFields();
+    stage.addApiKey('MyKey');
 
     // THEN
-    expect(() => new apigateway.Stage(stack, 'my-stage', {
-      deployment,
-      accessLogFormat: testFormat,
-    })).toThrow(/Access log format is specified without a destination/);
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::ApiKey', {
+      StageKeys: [
+        {
+          RestApiId: {
+            Ref: 'testapiD6451F70',
+          },
+          StageName: {
+            Ref: 'Stage0E8C2AF5',
+          },
+        },
+      ],
+    });
+  });
+
+  test('addApiKey is supported on an imported stage', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+    const api = new apigateway.RestApi(stack, 'test-api', { cloudWatchRole: false });
+    api.root.addMethod('GET');
+    const stage = apigateway.Stage.fromStageAttributes(stack, 'Stage', {
+      restApi: api,
+      stageName: 'MyStage',
+    });
+
+    // WHEN
+    stage.addApiKey('MyKey');
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::ApiKey', {
+      StageKeys: [
+        {
+          RestApiId: {
+            Ref: 'testapiD6451F70',
+          },
+          StageName: 'MyStage',
+        },
+      ],
+    });
+
+  });
+
+  describe('Metrics', () => {
+    test('metric', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+
+      // WHEN
+      const api = new apigateway.RestApi(stack, 'test-api');
+      const metricName = '4XXError';
+      const statistic = 'Sum';
+      const metric = api.deploymentStage.metric(metricName, { statistic });
+
+      // THEN
+      expect(metric.namespace).toEqual('AWS/ApiGateway');
+      expect(metric.metricName).toEqual(metricName);
+      expect(metric.statistic).toEqual(statistic);
+      expect(metric.dimensions).toEqual({ ApiName: 'test-api', Stage: api.deploymentStage.stageName });
+    });
+
+    test('metricClientError', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+
+      // WHEN
+      const api = new apigateway.RestApi(stack, 'test-api');
+      const color = '#00ff00';
+      const metric = api.deploymentStage.metricClientError({ color });
+
+      // THEN
+      expect(metric.metricName).toEqual('4XXError');
+      expect(metric.statistic).toEqual('Sum');
+      expect(metric.color).toEqual(color);
+      expect(metric.dimensions).toEqual({ ApiName: 'test-api', Stage: api.deploymentStage.stageName });
+    });
+
+    test('metricServerError', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+
+      // WHEN
+      const api = new apigateway.RestApi(stack, 'test-api');
+      const color = '#00ff00';
+      const metric = api.deploymentStage.metricServerError({ color });
+
+      // THEN
+      expect(metric.metricName).toEqual('5XXError');
+      expect(metric.statistic).toEqual('Sum');
+      expect(metric.color).toEqual(color);
+      expect(metric.dimensions).toEqual({ ApiName: 'test-api', Stage: api.deploymentStage.stageName });
+    });
+
+    test('metricCacheHitCount', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+
+      // WHEN
+      const api = new apigateway.RestApi(stack, 'test-api');
+      const color = '#00ff00';
+      const metric = api.deploymentStage.metricCacheHitCount({ color });
+
+      // THEN
+      expect(metric.metricName).toEqual('CacheHitCount');
+      expect(metric.statistic).toEqual('Sum');
+      expect(metric.color).toEqual(color);
+      expect(metric.dimensions).toEqual({ ApiName: 'test-api', Stage: api.deploymentStage.stageName });
+    });
+
+    test('metricCacheMissCount', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+
+      // WHEN
+      const api = new apigateway.RestApi(stack, 'test-api');
+      const color = '#00ff00';
+      const metric = api.deploymentStage.metricCacheMissCount({ color });
+
+      // THEN
+      expect(metric.metricName).toEqual('CacheMissCount');
+      expect(metric.statistic).toEqual('Sum');
+      expect(metric.color).toEqual(color);
+      expect(metric.dimensions).toEqual({ ApiName: 'test-api', Stage: api.deploymentStage.stageName });
+    });
+
+    test('metricCount', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+
+      // WHEN
+      const api = new apigateway.RestApi(stack, 'test-api');
+      const color = '#00ff00';
+      const metric = api.deploymentStage.metricCount({ color });
+
+      // THEN
+      expect(metric.metricName).toEqual('Count');
+      expect(metric.statistic).toEqual('SampleCount');
+      expect(metric.color).toEqual(color);
+      expect(metric.dimensions).toEqual({ ApiName: 'test-api', Stage: api.deploymentStage.stageName });
+    });
+
+    test('metricIntegrationLatency', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+
+      // WHEN
+      const api = new apigateway.RestApi(stack, 'test-api');
+      const color = '#00ff00';
+      const metric = api.deploymentStage.metricIntegrationLatency({ color });
+
+      // THEN
+      expect(metric.metricName).toEqual('IntegrationLatency');
+      expect(metric.statistic).toEqual('Average');
+      expect(metric.color).toEqual(color);
+      expect(metric.dimensions).toEqual({ ApiName: 'test-api', Stage: api.deploymentStage.stageName });
+    });
+
+    test('metricLatency', () => {
+      // GIVEN
+      const stack = new cdk.Stack();
+
+      // WHEN
+      const api = new apigateway.RestApi(stack, 'test-api');
+      const color = '#00ff00';
+      const metric = api.deploymentStage.metricLatency({ color });
+
+      // THEN
+      expect(metric.metricName).toEqual('Latency');
+      expect(metric.statistic).toEqual('Average');
+      expect(metric.color).toEqual(color);
+      expect(metric.dimensions).toEqual({ ApiName: 'test-api', Stage: api.deploymentStage.stageName });
+    });
   });
 });

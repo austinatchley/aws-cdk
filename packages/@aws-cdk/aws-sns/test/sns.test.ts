@@ -76,15 +76,17 @@ describe('Topic', () => {
 
     });
 
-    // NOTE: This test case should be invalid when CloudFormation problem reported in CDK issue 12386 is resolved
-    // see https://github.com/aws/aws-cdk/issues/12386
-    test('throw with missing topicName on fifo topic', () => {
+    test('Adds .fifo suffix when no topicName is passed', () => {
       const stack = new cdk.Stack();
 
-      expect(() => new sns.Topic(stack, 'MyTopic', {
+      new sns.Topic(stack, 'MyTopic', {
         fifo: true,
-      })).toThrow(/FIFO SNS topics must be given a topic name./);
+      });
 
+      Template.fromStack(stack).hasResourceProperties('AWS::SNS::Topic', {
+        'FifoTopic': true,
+        'TopicName': 'MyTopic.fifo',
+      });
 
     });
 
@@ -343,7 +345,21 @@ describe('Topic', () => {
     // THEN
     expect(imported.topicName).toEqual('my_corporate_topic');
     expect(imported.topicArn).toEqual('arn:aws:sns:*:123456789012:my_corporate_topic');
+    expect(imported.fifo).toEqual(false);
 
+  });
+
+  test('fromTopicArn fifo', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const imported = sns.Topic.fromTopicArn(stack, 'Imported', 'arn:aws:sns:*:123456789012:mytopic.fifo');
+
+    // THEN
+    expect(imported.topicName).toEqual('mytopic.fifo');
+    expect(imported.topicArn).toEqual('arn:aws:sns:*:123456789012:mytopic.fifo');
+    expect(imported.fifo).toEqual(true);
   });
 
   test('test metrics', () => {

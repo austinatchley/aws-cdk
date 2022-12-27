@@ -9,7 +9,7 @@ import * as kms from '@aws-cdk/aws-kms';
 import * as s3 from '@aws-cdk/aws-s3';
 import * as secretsmanager from '@aws-cdk/aws-secretsmanager';
 import { ArnFormat, Aws, Duration, IResource, Lazy, Names, PhysicalName, Reference, Resource, SecretValue, Stack, Token, TokenComparison, Tokenization } from '@aws-cdk/core';
-import { Construct } from 'constructs';
+import { Construct, IConstruct } from 'constructs';
 import { IArtifacts } from './artifacts';
 import { BuildSpec } from './build-spec';
 import { Cache } from './cache';
@@ -24,10 +24,6 @@ import { LoggingOptions } from './project-logs';
 import { renderReportGroupArn } from './report-group-utils';
 import { ISource } from './source';
 import { CODEPIPELINE_SOURCE_ARTIFACTS_TYPE, NO_SOURCE_TYPE } from './source-types';
-
-// v2 - keep this import as a separate section to reduce merge conflict when forward merging with the v2 branch.
-// eslint-disable-next-line
-import { Construct as CoreConstruct } from '@aws-cdk/core';
 
 const VPC_POLICY_SYM = Symbol.for('@aws-cdk/aws-codebuild.roleVpcPolicy');
 
@@ -696,6 +692,26 @@ export interface CommonProjectProps {
    * @default - no explicit limit is set
    */
   readonly concurrentBuildLimit?: number
+
+  /**
+   * Add the permissions necessary for debugging builds with SSM Session Manager
+   *
+   * If the following prerequisites have been met:
+   *
+   * - The necessary permissions have been added by setting this flag to true.
+   * - The build image has the SSM agent installed (true for default CodeBuild images).
+   * - The build is started with [debugSessionEnabled](https://docs.aws.amazon.com/codebuild/latest/APIReference/API_StartBuild.html#CodeBuild-StartBuild-request-debugSessionEnabled) set to true.
+   *
+   * Then the build container can be paused and inspected using Session Manager
+   * by invoking the `codebuild-breakpoint` command somewhere during the build.
+   *
+   * `codebuild-breakpoint` commands will be ignored if the build is not started
+   * with `debugSessionEnabled=true`.
+   *
+   * @see https://docs.aws.amazon.com/codebuild/latest/userguide/session-manager.html
+   * @default false
+   */
+  readonly ssmSessionPermissions?: boolean;
 }
 
 export interface ProjectProps extends CommonProjectProps {
@@ -852,7 +868,7 @@ export class Project extends ProjectBase {
       }
 
       if (principal) {
-        const stack = Stack.of(principal);
+        const stack = Stack.of(principal as unknown as IConstruct);
 
         // save the SSM env variables
         if (envVariable.type === BuildEnvironmentVariableType.PARAMETER_STORE) {
@@ -862,7 +878,7 @@ export class Project extends ProjectBase {
             // If the parameter name starts with / the resource name is not separated with a double '/'
             // arn:aws:ssm:region:1111111111:parameter/PARAM_NAME
             resourceName: envVariableValue.startsWith('/')
-              ? envVariableValue.substr(1)
+              ? envVariableValue.slice(1)
               : envVariableValue,
           }));
         }
@@ -1133,6 +1149,27 @@ export class Project extends ProjectBase {
       }));
     }
 
+    // https://docs.aws.amazon.com/codebuild/latest/userguide/session-manager.html
+    if (props.ssmSessionPermissions) {
+      this.addToRolePolicy(new iam.PolicyStatement({
+        actions: [
+          // For the SSM channel
+          'ssmmessages:CreateControlChannel',
+          'ssmmessages:CreateDataChannel',
+          'ssmmessages:OpenControlChannel',
+          'ssmmessages:OpenDataChannel',
+          // In case the SSM session is set up to log commands to CloudWatch
+          'logs:DescribeLogGroups',
+          'logs:CreateLogStream',
+          'logs:PutLogEvents',
+          // In case the SSM session is set up to log commands to S3.
+          's3:GetEncryptionConfiguration',
+          's3:PutObject',
+        ],
+        resources: ['*'],
+      }));
+    }
+
     if (props.encryptionKey) {
       this.encryptionKey = props.encryptionKey;
     }
@@ -1141,6 +1178,8 @@ export class Project extends ProjectBase {
     if (isBindableBuildImage(this.buildImage)) {
       this.buildImage.bind(this, this, {});
     }
+
+    this.node.addValidation({ validate: () => this.validateProject() });
   }
 
   public enableBatchBuilds(): BatchBuildConfig | undefined {
@@ -1213,7 +1252,7 @@ export class Project extends ProjectBase {
    * @param _scope the construct the binding is taking place in
    * @param options additional options for the binding
    */
-  public bindToCodePipeline(_scope: CoreConstruct, options: BindToCodePipelineOptions): void {
+  public bindToCodePipeline(_scope: Construct, options: BindToCodePipelineOptions): void {
     // work around a bug in CodeBuild: it ignores the KMS key set on the pipeline,
     // and always uses its own, project-level key
     if (options.artifactBucket.encryptionKey && !this._encryptionKey) {
@@ -1229,10 +1268,7 @@ export class Project extends ProjectBase {
     }
   }
 
-  /**
-   * @override
-   */
-  protected validate(): string[] {
+  private validateProject(): string[] {
     const ret = new Array<string>();
     if (this.source.type === CODEPIPELINE_SOURCE_ARTIFACTS_TYPE) {
       if (this._secondarySources.length > 0) {
@@ -1639,33 +1675,7 @@ export interface BuildImageConfig { }
 /** A variant of {@link IBuildImage} that allows binding to the project. */
 export interface IBindableBuildImage extends IBuildImage {
   /** Function that allows the build image access to the construct tree. */
-  bind(scope: CoreConstruct, project: IProject, options: BuildImageBindOptions): BuildImageConfig;
-}
-
-class ArmBuildImage implements IBuildImage {
-  public readonly type = 'ARM_CONTAINER';
-  public readonly defaultComputeType = ComputeType.LARGE;
-  public readonly imagePullPrincipalType = ImagePullPrincipalType.CODEBUILD;
-  public readonly imageId: string;
-
-  constructor(imageId: string) {
-    this.imageId = imageId;
-  }
-
-  public validate(buildEnvironment: BuildEnvironment): string[] {
-    const ret = [];
-    if (buildEnvironment.computeType &&
-        buildEnvironment.computeType !== ComputeType.SMALL &&
-        buildEnvironment.computeType !== ComputeType.LARGE) {
-      ret.push(`ARM images only support ComputeTypes '${ComputeType.SMALL}' and '${ComputeType.LARGE}' - ` +
-        `'${buildEnvironment.computeType}' was given`);
-    }
-    return ret;
-  }
-
-  public runScriptBuildspec(entrypoint: string): BuildSpec {
-    return runScriptLinuxBuildSpec(entrypoint);
-  }
+  bind(scope: Construct, project: IProject, options: BuildImageBindOptions): BuildImageConfig;
 }
 
 /**
@@ -1695,8 +1705,12 @@ interface LinuxBuildImageProps {
   readonly repository?: ecr.IRepository;
 }
 
+// Keep around to resolve a circular dependency until removing deprecated ARM image constants from LinuxBuildImage
+// eslint-disable-next-line no-duplicate-imports, import/order
+import { LinuxArmBuildImage } from './linux-arm-build-image';
+
 /**
- * A CodeBuild image running Linux.
+ * A CodeBuild image running x86-64 Linux.
  *
  * This class has a bunch of public constants that represent the most popular images.
  *
@@ -1717,15 +1731,23 @@ export class LinuxBuildImage implements IBuildImage {
   public static readonly STANDARD_4_0 = LinuxBuildImage.codeBuildImage('aws/codebuild/standard:4.0');
   /** The `aws/codebuild/standard:5.0` build image. */
   public static readonly STANDARD_5_0 = LinuxBuildImage.codeBuildImage('aws/codebuild/standard:5.0');
+  /** The `aws/codebuild/standard:6.0` build image. */
+  public static readonly STANDARD_6_0 = LinuxBuildImage.codeBuildImage('aws/codebuild/standard:6.0');
 
   public static readonly AMAZON_LINUX_2 = LinuxBuildImage.codeBuildImage('aws/codebuild/amazonlinux2-x86_64-standard:1.0');
   public static readonly AMAZON_LINUX_2_2 = LinuxBuildImage.codeBuildImage('aws/codebuild/amazonlinux2-x86_64-standard:2.0');
   /** The Amazon Linux 2 x86_64 standard image, version `3.0`. */
   public static readonly AMAZON_LINUX_2_3 = LinuxBuildImage.codeBuildImage('aws/codebuild/amazonlinux2-x86_64-standard:3.0');
+  /** The Amazon Linux 2 x86_64 standard image, version `4.0`. */
+  public static readonly AMAZON_LINUX_2_4 = LinuxBuildImage.codeBuildImage('aws/codebuild/amazonlinux2-x86_64-standard:4.0');
 
-  public static readonly AMAZON_LINUX_2_ARM: IBuildImage = new ArmBuildImage('aws/codebuild/amazonlinux2-aarch64-standard:1.0');
-  /** Image "aws/codebuild/amazonlinux2-aarch64-standard:2.0". */
-  public static readonly AMAZON_LINUX_2_ARM_2: IBuildImage = new ArmBuildImage('aws/codebuild/amazonlinux2-aarch64-standard:2.0');
+  /** @deprecated Use LinuxArmBuildImage.AMAZON_LINUX_2_STANDARD_1_0 instead. */
+  public static readonly AMAZON_LINUX_2_ARM = LinuxArmBuildImage.AMAZON_LINUX_2_STANDARD_1_0;
+  /**
+   * Image "aws/codebuild/amazonlinux2-aarch64-standard:2.0".
+   * @deprecated Use LinuxArmBuildImage.AMAZON_LINUX_2_STANDARD_2_0 instead.
+   * */
+  public static readonly AMAZON_LINUX_2_ARM_2 = LinuxArmBuildImage.AMAZON_LINUX_2_STANDARD_2_0;
 
   /** @deprecated Use {@link STANDARD_2_0} and specify runtime in buildspec runtime-versions section */
   public static readonly UBUNTU_14_04_BASE = LinuxBuildImage.codeBuildImage('aws/codebuild/ubuntu-base:14.04');
@@ -1789,7 +1811,7 @@ export class LinuxBuildImage implements IBuildImage {
   public static readonly UBUNTU_14_04_DOTNET_CORE_2_1 = LinuxBuildImage.codeBuildImage('aws/codebuild/dot-net:core-2.1');
 
   /**
-   * @returns a Linux build image from a Docker Hub image.
+   * @returns a x86-64 Linux build image from a Docker Hub image.
    */
   public static fromDockerRegistry(name: string, options: DockerImageOptions = {}): IBuildImage {
     return new LinuxBuildImage({
@@ -1800,7 +1822,7 @@ export class LinuxBuildImage implements IBuildImage {
   }
 
   /**
-   * @returns A Linux build image from an ECR repository.
+   * @returns A x86-64 Linux build image from an ECR repository.
    *
    * NOTE: if the repository is external (i.e. imported), then we won't be able to add
    * a resource policy statement for it so CodeBuild can pull the image.
@@ -1808,18 +1830,18 @@ export class LinuxBuildImage implements IBuildImage {
    * @see https://docs.aws.amazon.com/codebuild/latest/userguide/sample-ecr.html
    *
    * @param repository The ECR repository
-   * @param tag Image tag (default "latest")
+   * @param tagOrDigest Image tag or digest (default "latest", digests must start with `sha256:`)
    */
-  public static fromEcrRepository(repository: ecr.IRepository, tag: string = 'latest'): IBuildImage {
+  public static fromEcrRepository(repository: ecr.IRepository, tagOrDigest: string = 'latest'): IBuildImage {
     return new LinuxBuildImage({
-      imageId: repository.repositoryUriForTag(tag),
+      imageId: repository.repositoryUriForTagOrDigest(tagOrDigest),
       imagePullPrincipalType: ImagePullPrincipalType.SERVICE_ROLE,
       repository,
     });
   }
 
   /**
-   * Uses an Docker image asset as a Linux build image.
+   * Uses an Docker image asset as a x86-64 Linux build image.
    */
   public static fromAsset(scope: Construct, id: string, props: DockerImageAssetProps): IBuildImage {
     const asset = new DockerImageAsset(scope, id, props);
@@ -1945,6 +1967,16 @@ export class WindowsBuildImage implements IBuildImage {
   });
 
   /**
+   * The standard CodeBuild image `aws/codebuild/windows-base:2019-2.0`, which is
+   * based off Windows Server Core 2019.
+   */
+  public static readonly WIN_SERVER_CORE_2019_BASE_2_0: IBuildImage = new WindowsBuildImage({
+    imageId: 'aws/codebuild/windows-base:2019-2.0',
+    imagePullPrincipalType: ImagePullPrincipalType.CODEBUILD,
+    imageType: WindowsImageType.SERVER_2019,
+  });
+
+  /**
    * @returns a Windows build image from a Docker Hub image.
    */
   public static fromDockerRegistry(
@@ -1961,7 +1993,7 @@ export class WindowsBuildImage implements IBuildImage {
   }
 
   /**
-   * @returns A Linux build image from an ECR repository.
+   * @returns A Windows build image from an ECR repository.
    *
    * NOTE: if the repository is external (i.e. imported), then we won't be able to add
    * a resource policy statement for it so CodeBuild can pull the image.
@@ -1969,15 +2001,15 @@ export class WindowsBuildImage implements IBuildImage {
    * @see https://docs.aws.amazon.com/codebuild/latest/userguide/sample-ecr.html
    *
    * @param repository The ECR repository
-   * @param tag Image tag (default "latest")
+   * @param tagOrDigest Image tag or digest (default "latest", digests must start with `sha256:`)
    */
   public static fromEcrRepository(
     repository: ecr.IRepository,
-    tag: string = 'latest',
+    tagOrDigest: string = 'latest',
     imageType: WindowsImageType = WindowsImageType.STANDARD): IBuildImage {
 
     return new WindowsBuildImage({
-      imageId: repository.repositoryUriForTag(tag),
+      imageId: repository.repositoryUriForTagOrDigest(tagOrDigest),
       imagePullPrincipalType: ImagePullPrincipalType.SERVICE_ROLE,
       imageType,
       repository,

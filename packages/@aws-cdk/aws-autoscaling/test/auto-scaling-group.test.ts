@@ -1,13 +1,14 @@
-import '@aws-cdk/assert-internal/jest';
-import { ABSENT, InspectionFailure, ResourcePart } from '@aws-cdk/assert-internal';
+import { Annotations, Match, Template } from '@aws-cdk/assertions';
 import * as cloudwatch from '@aws-cdk/aws-cloudwatch';
 import * as ec2 from '@aws-cdk/aws-ec2';
+import { AmazonLinuxCpuType, AmazonLinuxGeneration, AmazonLinuxImage, InstanceType, LaunchTemplate } from '@aws-cdk/aws-ec2';
+import { ApplicationListener, ApplicationLoadBalancer, ApplicationTargetGroup } from '@aws-cdk/aws-elasticloadbalancingv2';
 import * as iam from '@aws-cdk/aws-iam';
 import * as sns from '@aws-cdk/aws-sns';
 import { testDeprecated } from '@aws-cdk/cdk-build-tools';
-import * as cxschema from '@aws-cdk/cloud-assembly-schema';
 import * as cdk from '@aws-cdk/core';
 import * as autoscaling from '../lib';
+import { OnDemandAllocationStrategy, SpotAllocationStrategy } from '../lib';
 
 /* eslint-disable quote-props */
 
@@ -22,7 +23,7 @@ describe('auto scaling group', () => {
       vpc,
     });
 
-    expect(stack).toMatchTemplate({
+    Template.fromStack(stack).templateMatches({
       'Parameters': {
         'SsmParameterValueawsserviceamiamazonlinuxlatestamznamihvmx8664gp2C96584B6F00A464EAD1953AFF4B05118Parameter': {
           'Type': 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>',
@@ -136,8 +137,6 @@ describe('auto scaling group', () => {
         },
       },
     });
-
-
   });
 
   test('can set minCapacity, maxCapacity, desiredCapacity to 0', () => {
@@ -153,14 +152,11 @@ describe('auto scaling group', () => {
       desiredCapacity: 0,
     });
 
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       MinSize: '0',
       MaxSize: '0',
       DesiredCapacity: '0',
-    },
-    );
-
-
+    });
   });
 
   test('validation is not performed when using Tokens', () => {
@@ -177,14 +173,11 @@ describe('auto scaling group', () => {
     });
 
     // THEN: no exception
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       MinSize: '5',
       MaxSize: '1',
       DesiredCapacity: '20',
-    },
-    );
-
-
+    });
   });
 
   test('userdata can be overridden by image', () => {
@@ -206,8 +199,6 @@ describe('auto scaling group', () => {
 
     // THEN
     expect(asg.userData.render()).toEqual('#!/bin/bash\nit me!');
-
-
   });
 
   test('userdata can be overridden at ASG directly', () => {
@@ -233,8 +224,6 @@ describe('auto scaling group', () => {
 
     // THEN
     expect(asg.userData.render()).toEqual('#!/bin/bash\nno me!');
-
-
   });
 
   test('can specify only min capacity', () => {
@@ -251,13 +240,10 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       MinSize: '10',
       MaxSize: '10',
-    },
-    );
-
-
+    });
   });
 
   test('can specify only max capacity', () => {
@@ -274,13 +260,10 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       MinSize: '1',
       MaxSize: '10',
-    },
-    );
-
-
+    });
   });
 
   test('can specify only desiredCount', () => {
@@ -297,14 +280,30 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       MinSize: '1',
       MaxSize: '10',
       DesiredCapacity: '10',
-    },
-    );
+    });
+  });
 
+  test('can specify only defaultInstanceWarmup', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+    const vpc = mockVpc(stack);
 
+    // WHEN
+    new autoscaling.AutoScalingGroup(stack, 'MyFleet', {
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.M4, ec2.InstanceSize.MICRO),
+      machineImage: new ec2.AmazonLinuxImage(),
+      vpc,
+      defaultInstanceWarmup: cdk.Duration.seconds(5),
+    });
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      DefaultInstanceWarmup: 5,
+    });
   });
 
   test('addToRolePolicy can be used to add statements to the role policy', () => {
@@ -322,7 +321,7 @@ describe('auto scaling group', () => {
       resources: ['*'],
     }));
 
-    expect(stack).toHaveResource('AWS::IAM::Policy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {
         Version: '2012-10-17',
         Statement: [
@@ -352,7 +351,7 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResourceLike('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResource('AWS::AutoScaling::AutoScalingGroup', {
       UpdatePolicy: {
         AutoScalingReplacingUpdate: {
           WillReplace: true,
@@ -363,9 +362,7 @@ describe('auto scaling group', () => {
           MinSuccessfulInstancesPercent: 50,
         },
       },
-    }, ResourcePart.CompleteDefinition);
-
-
+    });
   });
 
   testDeprecated('can configure rolling update', () => {
@@ -386,7 +383,7 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResourceLike('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResource('AWS::AutoScaling::AutoScalingGroup', {
       UpdatePolicy: {
         'AutoScalingRollingUpdate': {
           'MinSuccessfulInstancesPercent': 50,
@@ -395,9 +392,7 @@ describe('auto scaling group', () => {
           'SuspendProcesses': ['HealthCheck', 'ReplaceUnhealthy', 'AZRebalance', 'AlarmNotification', 'ScheduledActions'],
         },
       },
-    }, ResourcePart.CompleteDefinition);
-
-
+    });
   });
 
   testDeprecated('can configure resource signals', () => {
@@ -415,16 +410,14 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResourceLike('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResource('AWS::AutoScaling::AutoScalingGroup', {
       CreationPolicy: {
         ResourceSignal: {
           Count: 5,
           Timeout: 'PT11M6S',
         },
       },
-    }, ResourcePart.CompleteDefinition);
-
-
+    });
   });
 
   test('can configure EC2 health check', () => {
@@ -441,11 +434,9 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResourceLike('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       HealthCheckType: 'EC2',
     });
-
-
   });
 
   test('can configure EBS health check', () => {
@@ -462,12 +453,10 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResourceLike('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       HealthCheckType: 'ELB',
       HealthCheckGracePeriod: 900,
     });
-
-
   });
 
   test('can add Security Group to Fleet', () => {
@@ -482,7 +471,7 @@ describe('auto scaling group', () => {
       vpc,
     });
     asg.addSecurityGroup(mockSecurityGroup(stack));
-    expect(stack).toHaveResource('AWS::AutoScaling::LaunchConfiguration', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::LaunchConfiguration', {
       SecurityGroups: [
         {
           'Fn::GetAtt': [
@@ -493,7 +482,6 @@ describe('auto scaling group', () => {
         'most-secure',
       ],
     });
-
   });
 
   test('can set tags', () => {
@@ -514,7 +502,7 @@ describe('auto scaling group', () => {
     cdk.Tags.of(asg).add('notsuper', 'caramel', { applyToLaunchedInstances: false });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       Tags: [
         {
           Key: 'Name',
@@ -533,7 +521,6 @@ describe('auto scaling group', () => {
         },
       ],
     });
-
   });
 
   test('allows setting spot price', () => {
@@ -552,11 +539,9 @@ describe('auto scaling group', () => {
 
     // THEN
     expect(asg.spotPrice).toEqual('0.05');
-    expect(stack).toHaveResource('AWS::AutoScaling::LaunchConfiguration', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::LaunchConfiguration', {
       SpotPrice: '0.05',
     });
-
-
   });
 
   test('allows association of public IP address', () => {
@@ -578,11 +563,9 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::LaunchConfiguration', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::LaunchConfiguration', {
       AssociatePublicIpAddress: true,
-    },
-    );
-
+    });
   });
 
   test('association of public IP address requires public subnet', () => {
@@ -602,7 +585,6 @@ describe('auto scaling group', () => {
         associatePublicIpAddress: true,
       });
     }).toThrow();
-
   });
 
   test('allows disassociation of public IP address', () => {
@@ -622,11 +604,9 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::LaunchConfiguration', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::LaunchConfiguration', {
       AssociatePublicIpAddress: false,
-    },
-    );
-
+    });
   });
 
   test('does not specify public IP address association by default', () => {
@@ -645,16 +625,9 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::LaunchConfiguration', (resource: any, errors: InspectionFailure) => {
-      for (const key of Object.keys(resource)) {
-        if (key === 'AssociatePublicIpAddress') {
-          errors.failureReason = 'Has AssociatePublicIpAddress';
-          return false;
-        }
-      }
-      return true;
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::LaunchConfiguration', {
+      AssociatePublicIpAddress: Match.absent(),
     });
-
   });
 
   test('an existing security group can be specified instead of auto-created', () => {
@@ -672,11 +645,9 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::LaunchConfiguration', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::LaunchConfiguration', {
       SecurityGroups: ['most-secure'],
-    },
-    );
-
+    });
   });
 
   test('an existing role can be specified instead of auto-created', () => {
@@ -695,10 +666,9 @@ describe('auto scaling group', () => {
 
     // THEN
     expect(asg.role).toEqual(importedRole);
-    expect(stack).toHaveResource('AWS::IAM::InstanceProfile', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::InstanceProfile', {
       'Roles': ['HelloDude'],
     });
-
   });
 
   test('defaultChild is available on an ASG', () => {
@@ -713,11 +683,9 @@ describe('auto scaling group', () => {
 
     // THEN
     expect(asg.node.defaultChild instanceof autoscaling.CfnAutoScalingGroup).toEqual(true);
-
-
   });
 
-  test('can set blockDeviceMappings', () => {
+  testDeprecated('can set blockDeviceMappings', () => {
     // GIVEN
     const stack = new cdk.Stack();
     const vpc = mockVpc(stack);
@@ -751,11 +719,17 @@ describe('auto scaling group', () => {
       }, {
         deviceName: 'none',
         volume: autoscaling.BlockDeviceVolume.noDevice(),
+      }, {
+        deviceName: 'gp3-with-throughput',
+        volume: autoscaling.BlockDeviceVolume.ebs(15, {
+          volumeType: autoscaling.EbsDeviceVolumeType.GP3,
+          throughput: 350,
+        }),
       }],
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::LaunchConfiguration', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::LaunchConfiguration', {
       BlockDeviceMappings: [
         {
           DeviceName: 'ebs',
@@ -766,7 +740,7 @@ describe('auto scaling group', () => {
             VolumeSize: 15,
             VolumeType: 'io1',
           },
-          NoDevice: ABSENT,
+          NoDevice: Match.absent(),
         },
         {
           DeviceName: 'ebs-snapshot',
@@ -776,12 +750,12 @@ describe('auto scaling group', () => {
             VolumeSize: 500,
             VolumeType: 'sc1',
           },
-          NoDevice: ABSENT,
+          NoDevice: Match.absent(),
         },
         {
           DeviceName: 'ephemeral',
           VirtualName: 'ephemeral0',
-          NoDevice: ABSENT,
+          NoDevice: Match.absent(),
         },
         {
           DeviceName: 'disabled',
@@ -791,10 +765,16 @@ describe('auto scaling group', () => {
           DeviceName: 'none',
           NoDevice: true,
         },
+        {
+          DeviceName: 'gp3-with-throughput',
+          Ebs: {
+            VolumeSize: 15,
+            VolumeType: 'gp3',
+            Throughput: 350,
+          },
+        },
       ],
     });
-
-
   });
 
   test('can configure maxInstanceLifetime', () => {
@@ -809,14 +789,29 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       'MaxInstanceLifetime': 604800,
     });
-
-
   });
 
-  test('throws if maxInstanceLifetime < 7 days', () => {
+  test('can configure maxInstanceLifetime with 0', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+    const vpc = mockVpc(stack);
+    new autoscaling.AutoScalingGroup(stack, 'MyStack', {
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.M4, ec2.InstanceSize.MICRO),
+      machineImage: new ec2.AmazonLinuxImage(),
+      vpc,
+      maxInstanceLifetime: cdk.Duration.days(0),
+    });
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      'MaxInstanceLifetime': 0,
+    });
+  });
+
+  test('throws if maxInstanceLifetime < 1 day', () => {
     // GIVEN
     const stack = new cdk.Stack();
     const vpc = mockVpc(stack);
@@ -827,11 +822,9 @@ describe('auto scaling group', () => {
         instanceType: ec2.InstanceType.of(ec2.InstanceClass.M4, ec2.InstanceSize.MICRO),
         machineImage: new ec2.AmazonLinuxImage(),
         vpc,
-        maxInstanceLifetime: cdk.Duration.days(6),
+        maxInstanceLifetime: cdk.Duration.hours(23),
       });
-    }).toThrow(/maxInstanceLifetime must be between 7 and 365 days \(inclusive\)/);
-
-
+    }).toThrow(/maxInstanceLifetime must be between 1 and 365 days \(inclusive\)/);
   });
 
   test('throws if maxInstanceLifetime > 365 days', () => {
@@ -847,9 +840,72 @@ describe('auto scaling group', () => {
         vpc,
         maxInstanceLifetime: cdk.Duration.days(366),
       });
-    }).toThrow(/maxInstanceLifetime must be between 7 and 365 days \(inclusive\)/);
+    }).toThrow(/maxInstanceLifetime must be between 1 and 365 days \(inclusive\)/);
+  });
 
+  test.each([124, 1001])('throws if throughput is set less than 125 or more than 1000', (throughput) => {
+    const stack = new cdk.Stack();
+    const vpc = mockVpc(stack);
 
+    expect(() => {
+      new autoscaling.AutoScalingGroup(stack, 'MyStack', {
+        machineImage: new ec2.AmazonLinuxImage(),
+        instanceType: ec2.InstanceType.of(ec2.InstanceClass.M4, ec2.InstanceSize.MICRO),
+        vpc,
+        maxInstanceLifetime: cdk.Duration.days(0),
+        blockDevices: [{
+          deviceName: 'ebs',
+          volume: autoscaling.BlockDeviceVolume.ebs(15, {
+            volumeType: autoscaling.EbsDeviceVolumeType.GP3,
+            throughput,
+          }),
+        }],
+      });
+    }).toThrow(/throughput property takes a minimum of 125 and a maximum of 1000/);
+  });
+
+  test.each([
+    ...Object.values(autoscaling.EbsDeviceVolumeType).filter((v) => v !== 'gp3'),
+  ])('throws if throughput is set on any volume type other than GP3', (volumeType) => {
+    const stack = new cdk.Stack();
+    const vpc = mockVpc(stack);
+
+    expect(() => {
+      new autoscaling.AutoScalingGroup(stack, 'MyStack', {
+        machineImage: new ec2.AmazonLinuxImage(),
+        instanceType: ec2.InstanceType.of(ec2.InstanceClass.M4, ec2.InstanceSize.MICRO),
+        vpc,
+        maxInstanceLifetime: cdk.Duration.days(0),
+        blockDevices: [{
+          deviceName: 'ebs',
+          volume: autoscaling.BlockDeviceVolume.ebs(15, {
+            volumeType: volumeType,
+            throughput: 150,
+          }),
+        }],
+      });
+    }).toThrow(/throughput property requires volumeType: EbsDeviceVolumeType.GP3/);
+  });
+
+  test('throws if throughput / iops ratio is greater than 0.25', () => {
+    const stack = new cdk.Stack();
+    const vpc = mockVpc(stack);
+    expect(() => {
+      new autoscaling.AutoScalingGroup(stack, 'MyStack', {
+        machineImage: new ec2.AmazonLinuxImage(),
+        instanceType: ec2.InstanceType.of(ec2.InstanceClass.M4, ec2.InstanceSize.MICRO),
+        vpc,
+        maxInstanceLifetime: cdk.Duration.days(0),
+        blockDevices: [{
+          deviceName: 'ebs',
+          volume: autoscaling.BlockDeviceVolume.ebs(15, {
+            volumeType: autoscaling.EbsDeviceVolumeType.GP3,
+            throughput: 751,
+            iops: 3000,
+          }),
+        }],
+      });
+    }).toThrow('Throughput (MiBps) to iops ratio of 0.25033333333333335 is too high; maximum is 0.25 MiBps per iops');
   });
 
   test('can configure instance monitoring', () => {
@@ -866,10 +922,9 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::LaunchConfiguration', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::LaunchConfiguration', {
       InstanceMonitoring: false,
     });
-
   });
 
   test('instance monitoring defaults to absent', () => {
@@ -885,10 +940,9 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::LaunchConfiguration', {
-      InstanceMonitoring: ABSENT,
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::LaunchConfiguration', {
+      InstanceMonitoring: Match.absent(),
     });
-
   });
 
   test('throws if ephemeral volumeIndex < 0', () => {
@@ -908,8 +962,6 @@ describe('auto scaling group', () => {
         }],
       });
     }).toThrow(/volumeIndex must be a number starting from 0/);
-
-
   });
 
   test('throws if volumeType === IO1 without iops', () => {
@@ -933,8 +985,6 @@ describe('auto scaling group', () => {
         }],
       });
     }).toThrow(/ops property is required with volumeType: EbsDeviceVolumeType.IO1/);
-
-
   });
 
   test('warning if iops without volumeType', () => {
@@ -942,7 +992,7 @@ describe('auto scaling group', () => {
     const stack = new cdk.Stack();
     const vpc = mockVpc(stack);
 
-    const asg = new autoscaling.AutoScalingGroup(stack, 'MyStack', {
+    new autoscaling.AutoScalingGroup(stack, 'MyStack', {
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.M4, ec2.InstanceSize.MICRO),
       machineImage: new ec2.AmazonLinuxImage(),
       vpc,
@@ -957,10 +1007,7 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(asg.node.metadataEntry[0].type).toEqual(cxschema.ArtifactMetadataEntryType.WARN);
-    expect(asg.node.metadataEntry[0].data).toEqual('iops will be ignored without volumeType: EbsDeviceVolumeType.IO1');
-
-
+    Annotations.fromStack(stack).hasWarning('/Default/MyStack', 'iops will be ignored without volumeType: EbsDeviceVolumeType.IO1');
   });
 
   test('warning if iops and volumeType !== IO1', () => {
@@ -968,7 +1015,7 @@ describe('auto scaling group', () => {
     const stack = new cdk.Stack();
     const vpc = mockVpc(stack);
 
-    const asg = new autoscaling.AutoScalingGroup(stack, 'MyStack', {
+    new autoscaling.AutoScalingGroup(stack, 'MyStack', {
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.M4, ec2.InstanceSize.MICRO),
       machineImage: new ec2.AmazonLinuxImage(),
       vpc,
@@ -984,10 +1031,7 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(asg.node.metadataEntry[0].type).toEqual(cxschema.ArtifactMetadataEntryType.WARN);
-    expect(asg.node.metadataEntry[0].data).toEqual('iops will be ignored without volumeType: EbsDeviceVolumeType.IO1');
-
-
+    Annotations.fromStack(stack).hasWarning('/Default/MyStack', 'iops will be ignored without volumeType: EbsDeviceVolumeType.IO1');
   });
 
   test('step scaling on metric', () => {
@@ -1015,15 +1059,13 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::CloudWatch::Alarm', {
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudWatch::Alarm', {
       ComparisonOperator: 'LessThanOrEqualToThreshold',
       EvaluationPeriods: 1,
       MetricName: 'Metric',
       Namespace: 'Test',
       Period: 300,
     });
-
-
   });
 
   test('step scaling on MathExpression', () => {
@@ -1056,11 +1098,11 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).not.toHaveResource('AWS::CloudWatch::Alarm', {
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudWatch::Alarm', Match.not({
       Period: 60,
-    });
+    }));
 
-    expect(stack).toHaveResource('AWS::CloudWatch::Alarm', {
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudWatch::Alarm', {
       'ComparisonOperator': 'LessThanOrEqualToThreshold',
       'EvaluationPeriods': 1,
       'Metrics': [
@@ -1083,8 +1125,6 @@ describe('auto scaling group', () => {
       ],
       'Threshold': 49,
     });
-
-
   });
 
   test('test GroupMetrics.all(), adds a single MetricsCollection with no Metrics specified', () => {
@@ -1100,15 +1140,14 @@ describe('auto scaling group', () => {
     });
 
     // Then
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       MetricsCollection: [
         {
           Granularity: '1Minute',
-          Metrics: ABSENT,
+          Metrics: Match.absent(),
         },
       ],
     });
-
   });
 
   test('test can specify a subset of group metrics', () => {
@@ -1135,7 +1174,7 @@ describe('auto scaling group', () => {
     });
 
     // Then
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       MetricsCollection: [
         {
           Granularity: '1Minute',
@@ -1146,7 +1185,6 @@ describe('auto scaling group', () => {
         },
       ],
     });
-
   });
 
   test('test deduplication of group metrics ', () => {
@@ -1165,7 +1203,7 @@ describe('auto scaling group', () => {
     });
 
     // Then
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       MetricsCollection: [
         {
           Granularity: '1Minute',
@@ -1173,7 +1211,6 @@ describe('auto scaling group', () => {
         },
       ],
     });
-
   });
 
   test('allow configuring notifications', () => {
@@ -1200,7 +1237,7 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       NotificationConfigurations: [
         {
           TopicARN: { Ref: 'MyTopic86869434' },
@@ -1216,10 +1253,7 @@ describe('auto scaling group', () => {
           ],
         },
       ],
-    },
-    );
-
-
+    });
   });
 
   testDeprecated('throw if notification and notificationsTopics are both configured', () => {
@@ -1240,7 +1274,6 @@ describe('auto scaling group', () => {
         }],
       });
     }).toThrow('Cannot set \'notificationsTopic\' and \'notifications\', \'notificationsTopic\' is deprecated use \'notifications\' instead');
-
   });
 
   test('notificationTypes default includes all non test NotificationType', () => {
@@ -1262,7 +1295,7 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       NotificationConfigurations: [
         {
           TopicARN: { Ref: 'MyTopic86869434' },
@@ -1274,10 +1307,7 @@ describe('auto scaling group', () => {
           ],
         },
       ],
-    },
-    );
-
-
+    });
   });
 
   testDeprecated('setting notificationTopic configures all non test NotificationType', () => {
@@ -1295,7 +1325,7 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       NotificationConfigurations: [
         {
           TopicARN: { Ref: 'MyTopic86869434' },
@@ -1307,10 +1337,7 @@ describe('auto scaling group', () => {
           ],
         },
       ],
-    },
-    );
-
-
+    });
   });
 
   test('NotificationTypes.ALL includes all non test NotificationType', () => {
@@ -1333,11 +1360,9 @@ describe('auto scaling group', () => {
 
     // THEN
     expect(asg.areNewInstancesProtectedFromScaleIn()).toEqual(true);
-    expect(stack).toHaveResourceLike('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       NewInstancesProtectedFromScaleIn: true,
     });
-
-
   });
 
   test('Can protect new instances from scale-in via setter', () => {
@@ -1355,11 +1380,9 @@ describe('auto scaling group', () => {
 
     // THEN
     expect(asg.areNewInstancesProtectedFromScaleIn()).toEqual(true);
-    expect(stack).toHaveResourceLike('AWS::AutoScaling::AutoScalingGroup', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
       NewInstancesProtectedFromScaleIn: true,
     });
-
-
   });
 
   test('requires imdsv2', () => {
@@ -1376,12 +1399,527 @@ describe('auto scaling group', () => {
     });
 
     // THEN
-    expect(stack).toHaveResourceLike('AWS::AutoScaling::LaunchConfiguration', {
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::LaunchConfiguration', {
       MetadataOptions: {
         HttpTokens: 'required',
       },
     });
   });
+
+  test('supports termination policies', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+    const vpc = mockVpc(stack);
+
+    // WHEN
+    new autoscaling.AutoScalingGroup(stack, 'MyASG', {
+      vpc,
+      instanceType: new ec2.InstanceType('t2.micro'),
+      machineImage: ec2.MachineImage.latestAmazonLinux(),
+      terminationPolicies: [
+        autoscaling.TerminationPolicy.OLDEST_INSTANCE,
+        autoscaling.TerminationPolicy.DEFAULT,
+      ],
+    });
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      TerminationPolicies: [
+        'OldestInstance',
+        'Default',
+      ],
+    });
+  });
+
+  test('Can use imported Launch Template with ID', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+      launchTemplate: LaunchTemplate.fromLaunchTemplateAttributes(stack, 'imported-lt', {
+        launchTemplateId: 'test-lt-id',
+        versionNumber: '0',
+      }),
+      vpc: mockVpc(stack),
+    });
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      LaunchTemplate: {
+        LaunchTemplateId: 'test-lt-id',
+        Version: '0',
+      },
+    });
+  });
+
+  test('Can use imported Launch Template with name', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+      launchTemplate: LaunchTemplate.fromLaunchTemplateAttributes(stack, 'imported-lt', {
+        launchTemplateName: 'test-lt',
+        versionNumber: '0',
+      }),
+      vpc: mockVpc(stack),
+    });
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      LaunchTemplate: {
+        LaunchTemplateName: 'test-lt',
+        Version: '0',
+      },
+    });
+  });
+
+  test('Can use in-stack Launch Template reference', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const lt = new LaunchTemplate(stack, 'lt', {
+      instanceType: new InstanceType('t3.micro'),
+      machineImage: new AmazonLinuxImage({
+        generation: AmazonLinuxGeneration.AMAZON_LINUX_2,
+        cpuType: AmazonLinuxCpuType.X86_64,
+      }),
+    });
+
+    new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+      launchTemplate: lt,
+      vpc: mockVpc(stack),
+    });
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      LaunchTemplate: {
+        LaunchTemplateId: {
+          'Ref': 'ltB6511CF5',
+        },
+        Version: {
+          'Fn::GetAtt': [
+            'ltB6511CF5',
+            'LatestVersionNumber',
+          ],
+        },
+      },
+    });
+  });
+
+  test('Can use mixed instance policy', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const lt = LaunchTemplate.fromLaunchTemplateAttributes(stack, 'imported-lt', {
+      launchTemplateId: 'test-lt-id',
+      versionNumber: '0',
+    });
+
+    new autoscaling.AutoScalingGroup(stack, 'mip-asg', {
+      mixedInstancesPolicy: {
+        launchTemplate: lt,
+        launchTemplateOverrides: [{
+          instanceType: new InstanceType('t4g.micro'),
+          launchTemplate: lt,
+          weightedCapacity: 9,
+        }],
+        instancesDistribution: {
+          onDemandAllocationStrategy: OnDemandAllocationStrategy.PRIORITIZED,
+          onDemandBaseCapacity: 1,
+          onDemandPercentageAboveBaseCapacity: 2,
+          spotAllocationStrategy: SpotAllocationStrategy.CAPACITY_OPTIMIZED_PRIORITIZED,
+          spotInstancePools: 3,
+          spotMaxPrice: '4',
+        },
+      },
+      vpc: mockVpc(stack),
+    });
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      MixedInstancesPolicy: {
+        LaunchTemplate: {
+          LaunchTemplateSpecification: {
+            LaunchTemplateId: 'test-lt-id',
+            Version: '0',
+          },
+          Overrides: [
+            {
+              InstanceType: 't4g.micro',
+              LaunchTemplateSpecification: {
+                LaunchTemplateId: 'test-lt-id',
+                Version: '0',
+              },
+              WeightedCapacity: '9',
+            },
+          ],
+        },
+        InstancesDistribution: {
+          OnDemandAllocationStrategy: 'prioritized',
+          OnDemandBaseCapacity: 1,
+          OnDemandPercentageAboveBaseCapacity: 2,
+          SpotAllocationStrategy: 'capacity-optimized-prioritized',
+          SpotInstancePools: 3,
+          SpotMaxPrice: '4',
+        },
+      },
+    });
+  });
+
+  test('Can use mixed instance policy without instances distribution', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const lt = LaunchTemplate.fromLaunchTemplateAttributes(stack, 'imported-lt', {
+      launchTemplateId: 'test-lt-id',
+      versionNumber: '0',
+    });
+
+    new autoscaling.AutoScalingGroup(stack, 'mip-asg', {
+      mixedInstancesPolicy: {
+        launchTemplate: lt,
+        launchTemplateOverrides: [{
+          instanceType: new InstanceType('t4g.micro'),
+          launchTemplate: lt,
+          weightedCapacity: 9,
+        }],
+      },
+      vpc: mockVpc(stack),
+    });
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+      MixedInstancesPolicy: {
+        LaunchTemplate: {
+          LaunchTemplateSpecification: {
+            LaunchTemplateId: 'test-lt-id',
+            Version: '0',
+          },
+          Overrides: [
+            {
+              InstanceType: 't4g.micro',
+              LaunchTemplateSpecification: {
+                LaunchTemplateId: 'test-lt-id',
+                Version: '0',
+              },
+              WeightedCapacity: '9',
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  test('Cannot specify both Launch Template and Launch Config', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const lt = LaunchTemplate.fromLaunchTemplateAttributes(stack, 'imported-lt', {
+      launchTemplateId: 'test-lt-id',
+      versionNumber: '0',
+    });
+    const vpc = mockVpc(stack);
+
+    // THEN
+    expect(() => {
+      new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+        launchTemplate: lt,
+        instanceType: new InstanceType('t3.micro'),
+        machineImage: new AmazonLinuxImage({
+          generation: AmazonLinuxGeneration.AMAZON_LINUX_2,
+          cpuType: AmazonLinuxCpuType.X86_64,
+        }),
+        vpc,
+      });
+    }).toThrow('Setting \'machineImage\' must not be set when \'launchTemplate\' or \'mixedInstancesPolicy\' is set');
+    expect(() => {
+      new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg-2', {
+        launchTemplate: lt,
+        associatePublicIpAddress: true,
+        vpc,
+      });
+    }).toThrow('Setting \'associatePublicIpAddress\' must not be set when \'launchTemplate\' or \'mixedInstancesPolicy\' is set');
+  });
+
+  test('Cannot specify Launch Template without instance type', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const lt = new LaunchTemplate(stack, 'lt', {
+      machineImage: new AmazonLinuxImage({
+        generation: AmazonLinuxGeneration.AMAZON_LINUX_2,
+        cpuType: AmazonLinuxCpuType.X86_64,
+      }),
+    });
+
+    // THEN
+    expect(() => {
+      new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+        launchTemplate: lt,
+        vpc: mockVpc(stack),
+      });
+    }).toThrow('Setting \'launchTemplate\' requires its \'instanceType\' to be set');
+  });
+
+  test('Cannot specify Launch Template without machine image', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const lt = new LaunchTemplate(stack, 'lt', {
+      instanceType: new InstanceType('t3.micro'),
+    });
+
+    // THEN
+    expect(() => {
+      new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+        launchTemplate: lt,
+        vpc: mockVpc(stack),
+      });
+    }).toThrow('Setting \'launchTemplate\' requires its \'machineImage\' to be set');
+  });
+
+  test('Cannot specify mixed instance policy without machine image', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const lt = new LaunchTemplate(stack, 'lt', {
+      instanceType: new InstanceType('t3.micro'),
+    });
+
+    // THEN
+    expect(() => {
+      new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+        mixedInstancesPolicy: {
+          launchTemplate: lt,
+          launchTemplateOverrides: [{
+            instanceType: new InstanceType('t3.micro'),
+          }],
+        },
+        vpc: mockVpc(stack),
+      });
+    }).toThrow('Setting \'mixedInstancesPolicy.launchTemplate\' requires its \'machineImage\' to be set');
+  });
+
+  test('Cannot be created with launch configuration without machine image', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // THEN
+    expect(() => {
+      new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+        instanceType: new InstanceType('t3.micro'),
+        vpc: mockVpc(stack),
+      });
+    }).toThrow('Setting \'machineImage\' is required when \'launchTemplate\' and \'mixedInstancesPolicy\' is not set');
+  });
+
+  test('Cannot be created with launch configuration without instance type', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // THEN
+    expect(() => {
+      new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+        machineImage: new AmazonLinuxImage({
+          generation: AmazonLinuxGeneration.AMAZON_LINUX_2,
+          cpuType: AmazonLinuxCpuType.X86_64,
+        }),
+        vpc: mockVpc(stack),
+      });
+    }).toThrow('Setting \'instanceType\' is required when \'launchTemplate\' and \'mixedInstancesPolicy\' is not set');
+  });
+
+  test('Should throw when accessing inferred fields with imported Launch Template', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const asg = new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+      launchTemplate: LaunchTemplate.fromLaunchTemplateAttributes(stack, 'imported-lt', {
+        launchTemplateId: 'test-lt-id',
+        versionNumber: '0',
+      }),
+      vpc: mockVpc(stack),
+    });
+
+    // THEN
+    expect(() => {
+      asg.userData;
+    }).toThrow('The provided launch template does not expose its user data.');
+
+    expect(() => {
+      asg.connections;
+    }).toThrow('AutoScalingGroup can only be used as IConnectable if it is not created from an imported Launch Template.');
+
+    expect(() => {
+      asg.role;
+    }).toThrow('The provided launch template does not expose or does not define its role.');
+
+    expect(() => {
+      asg.addSecurityGroup(mockSecurityGroup(stack));
+    }).toThrow('You cannot add security groups when the Auto Scaling Group is created from a Launch Template.');
+  });
+
+  test('Should throw when accessing inferred fields with in-stack Launch Template not having corresponding properties', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const asg = new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+      launchTemplate: new LaunchTemplate(stack, 'in-stack-lt', {
+        instanceType: new ec2.InstanceType('t3.micro'),
+        machineImage: new ec2.AmazonLinuxImage({
+          generation: ec2.AmazonLinuxGeneration.AMAZON_LINUX_2,
+          cpuType: ec2.AmazonLinuxCpuType.X86_64,
+        }),
+      }),
+      vpc: mockVpc(stack),
+    });
+
+    // THEN
+    expect(() => {
+      asg.userData;
+    }).toThrow('The provided launch template does not expose its user data.');
+
+    expect(() => {
+      asg.connections;
+    }).toThrow('LaunchTemplate can only be used as IConnectable if a securityGroup is provided when constructing it.');
+
+    expect(() => {
+      asg.role;
+    }).toThrow('The provided launch template does not expose or does not define its role.');
+
+    expect(() => {
+      asg.addSecurityGroup(mockSecurityGroup(stack));
+    }).toThrow('You cannot add security groups when the Auto Scaling Group is created from a Launch Template.');
+  });
+
+  test('Should not throw when accessing inferred fields with in-stack Launch Template having corresponding properties', () => {
+    // GIVEN
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const asg = new autoscaling.AutoScalingGroup(stack, 'imported-lt-asg', {
+      launchTemplate: new LaunchTemplate(stack, 'in-stack-lt', {
+        instanceType: new ec2.InstanceType('t3.micro'),
+        machineImage: new ec2.AmazonLinuxImage({
+          generation: ec2.AmazonLinuxGeneration.AMAZON_LINUX_2,
+          cpuType: ec2.AmazonLinuxCpuType.X86_64,
+        }),
+        userData: ec2.UserData.forLinux(),
+        securityGroup: ec2.SecurityGroup.fromSecurityGroupId(stack, 'MySG2', 'most-secure'),
+        role: iam.Role.fromRoleArn(stack, 'ImportedRole', 'arn:aws:iam::123456789012:role/HelloDude'),
+      }),
+      vpc: mockVpc(stack),
+    });
+
+    // THEN
+    expect(() => {
+      asg.userData;
+    }).not.toThrow();
+
+    expect(() => {
+      asg.connections;
+    }).not.toThrow();
+
+    expect(() => {
+      asg.role;
+    }).not.toThrow();
+
+    expect(() => {
+      asg.addSecurityGroup(mockSecurityGroup(stack));
+    }).toThrow('You cannot add security groups when the Auto Scaling Group is created from a Launch Template.');
+  });
+
+  test('Should not throw when LaunchTemplate is used with CloudformationInit', () => {
+    const stack = new cdk.Stack();
+
+    // WHEN
+    const lt = new LaunchTemplate(stack, 'LaunchTemplate', {
+      machineImage: new AmazonLinuxImage(),
+      instanceType: new ec2.InstanceType('t3.micro'),
+      userData: ec2.UserData.forLinux(),
+      securityGroup: ec2.SecurityGroup.fromSecurityGroupId(stack, 'ImportedSg', 'securityGroupId'),
+      role: iam.Role.fromRoleArn(stack, 'ImportedRole', 'arn:aws:iam::123456789012:role/MockRole'),
+    });
+
+    const cfInit = ec2.CloudFormationInit.fromElements(
+      ec2.InitCommand.shellCommand('/bash'),
+    );
+
+    // THEN
+    expect(() => new autoscaling.AutoScalingGroup(stack, 'Asg', {
+      launchTemplate: lt,
+      init: cfInit,
+      vpc: mockVpc(stack),
+      signals: autoscaling.Signals.waitForAll(),
+    })).not.toThrow();
+
+  });
+
+  describe('multiple target groups', () => {
+    let asg: autoscaling.AutoScalingGroup;
+    let stack: cdk.Stack;
+    let vpc: ec2.IVpc;
+    let alb: ApplicationLoadBalancer;
+    let listener: ApplicationListener;
+
+    beforeEach(() => {
+      stack = new cdk.Stack(undefined, 'MyStack', { env: { region: 'us-east-1', account: '1234' } });
+      vpc = mockVpc(stack);
+      alb = new ApplicationLoadBalancer(stack, 'alb', {
+        vpc,
+        internetFacing: true,
+      });
+
+      listener = alb.addListener('Listener', {
+        port: 80,
+        open: true,
+      });
+
+      asg = new autoscaling.AutoScalingGroup(stack, 'MyFleet', {
+        instanceType: ec2.InstanceType.of(ec2.InstanceClass.M4, ec2.InstanceSize.MICRO),
+        machineImage: new ec2.AmazonLinuxImage(),
+        vpc,
+      });
+    });
+
+    test('Adding two application target groups should succeed validation', () => {
+      const atg1 = new ApplicationTargetGroup(stack, 'ATG1', { port: 443 });
+      const atg2 = new ApplicationTargetGroup(stack, 'ATG2', { port: 443 });
+
+      listener.addTargetGroups('tgs', { targetGroups: [atg1, atg2] });
+
+      asg.attachToApplicationTargetGroup(atg1);
+      asg.attachToApplicationTargetGroup(atg2);
+
+      expect(asg.node.validate()).toEqual([]);
+    });
+
+    test('Adding two application target groups should fail validation validate if `scaleOnRequestCount()` has been called', () => {
+      const atg1 = new ApplicationTargetGroup(stack, 'ATG1', { port: 443 });
+      const atg2 = new ApplicationTargetGroup(stack, 'ATG2', { port: 443 });
+
+      listener.addTargetGroups('tgs', { targetGroups: [atg1, atg2] });
+
+      asg.attachToApplicationTargetGroup(atg1);
+      asg.attachToApplicationTargetGroup(atg2);
+
+      asg.scaleOnRequestCount('requests-per-minute', { targetRequestsPerMinute: 60 });
+
+      expect(asg.node.validate()).toContainEqual('Cannon use multiple target groups if `scaleOnRequestCount()` is being used.');
+    });
+  });
+
 });
 
 function mockVpc(stack: cdk.Stack) {
@@ -1408,7 +1946,7 @@ test('Can set autoScalingGroupName', () => {
   });
 
   // THEN
-  expect(stack).toHaveResourceLike('AWS::AutoScaling::AutoScalingGroup', {
+  Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
     AutoScalingGroupName: 'MyAsg',
   });
 });
@@ -1441,16 +1979,57 @@ test('can use Vpc imported from unparseable list tokens', () => {
     vpc,
     allowAllOutbound: false,
     associatePublicIpAddress: false,
-    vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE },
+    vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
   });
 
   // THEN
-  expect(stack).toHaveResourceLike('AWS::AutoScaling::AutoScalingGroup', {
+  Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
     VPCZoneIdentifier: {
       'Fn::Split': [',', { 'Fn::ImportValue': 'myPrivateSubnetIds' }],
     },
   });
 });
+
+test('add price-capacity-optimized', () => {
+  // GIVEN
+  const stack = new cdk.Stack();
+
+  // WHEN
+  const lt = LaunchTemplate.fromLaunchTemplateAttributes(stack, 'imported-lt', {
+    launchTemplateId: 'test-lt-id',
+    versionNumber: '0',
+  });
+
+  new autoscaling.AutoScalingGroup(stack, 'mip-asg', {
+    mixedInstancesPolicy: {
+      launchTemplate: lt,
+      launchTemplateOverrides: [{
+        instanceType: new InstanceType('t4g.micro'),
+        launchTemplate: lt,
+        weightedCapacity: 9,
+      }],
+      instancesDistribution: {
+        onDemandAllocationStrategy: OnDemandAllocationStrategy.PRIORITIZED,
+        onDemandBaseCapacity: 1,
+        onDemandPercentageAboveBaseCapacity: 2,
+        spotAllocationStrategy: SpotAllocationStrategy.PRICE_CAPACITY_OPTIMIZED,
+        spotInstancePools: 3,
+        spotMaxPrice: '4',
+      },
+    },
+    vpc: mockVpc(stack),
+  });
+
+  // THEN
+  Template.fromStack(stack).hasResourceProperties('AWS::AutoScaling::AutoScalingGroup', {
+    MixedInstancesPolicy: {
+      InstancesDistribution: {
+        SpotAllocationStrategy: 'price-capacity-optimized',
+      },
+    },
+  });
+});
+
 
 function mockSecurityGroup(stack: cdk.Stack) {
   return ec2.SecurityGroup.fromSecurityGroupId(stack, 'MySG', 'most-secure');

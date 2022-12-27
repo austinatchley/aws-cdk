@@ -20,24 +20,6 @@ started quickly by using prepackaged build environments, or you can create
 custom build environments that use your own build tools. With CodeBuild, you are
 charged by the minute for the compute resources you use.
 
-## Installation
-
-Install the module:
-
-```console
-$ npm i @aws-cdk/aws-codebuild
-```
-
-Import it into your code:
-
-```ts nofixture
-import * as codebuild from '@aws-cdk/aws-codebuild';
-```
-
-The `codebuild.Project` construct represents a build project resource. See the
-reference documentation for a comprehensive list of initialization properties,
-methods and attributes.
-
 ## Source
 
 Build projects are usually associated with a _source_, which is specified via
@@ -95,7 +77,7 @@ const gitHubSource = codebuild.Source.gitHub({
   webhookFilters: [
     codebuild.FilterGroup
       .inEventOf(codebuild.EventAction.PUSH)
-      .andBranchIs('master')
+      .andBranchIs('main')
       .andCommitMessageIs('the commit message'),
   ], // optional, by default all pushes and Pull Requests will trigger a build
 });
@@ -122,7 +104,7 @@ const bbSource = codebuild.Source.bitBucket({
 
 ### For all Git sources
 
-For all Git sources, you can fetch submodules while cloing git repo.
+For all Git sources, you can fetch submodules while cloning git repo.
 
 ```ts
 const gitHubSource = codebuild.Source.gitHub({
@@ -176,7 +158,7 @@ const project = new codebuild.PipelineProject(this, 'Project', {
 })
 ```
 
-For more details, see the readme of the `@aws-cdk/@aws-codepipeline-actions` package.
+For more details, see the readme of the `@aws-cdk/aws-codepipeline-actions` package.
 
 ## Caching
 
@@ -280,11 +262,12 @@ can use the `environment` property to customize the build environment:
 ## Images
 
 The CodeBuild library supports both Linux and Windows images via the
-`LinuxBuildImage` and `WindowsBuildImage` classes, respectively.
+`LinuxBuildImage` (or `LinuxArmBuildImage`), and `WindowsBuildImage` classes, respectively.
 
 You can specify one of the predefined Windows/Linux images by using one
 of the constants such as `WindowsBuildImage.WIN_SERVER_CORE_2019_BASE`,
-`WindowsBuildImage.WINDOWS_BASE_2_0` or `LinuxBuildImage.STANDARD_2_0`.
+`WindowsBuildImage.WINDOWS_BASE_2_0`, `LinuxBuildImage.STANDARD_2_0`, or
+`LinuxArmBuildImage.AMAZON_LINUX_2_ARM`.
 
 Alternatively, you can specify a custom image using one of the static methods on
 `LinuxBuildImage`:
@@ -301,6 +284,10 @@ or one of the corresponding methods on `WindowsBuildImage`:
 * `WindowsBuildImage.fromDockerRegistry(image[, { secretsManagerCredentials }, imageType])`
 * `WindowsBuildImage.fromEcrRepository(repo[, tag, imageType])`
 * `WindowsBuildImage.fromAsset(parent, id, props, [, imageType])`
+
+or one of the corresponding methods on `LinuxArmBuildImage`:
+
+* `LinuxArmBuildImage.fromEcrRepository(repo[, tag])`
 
 Note that the `WindowsBuildImage` version of the static methods accepts an optional parameter of type `WindowsImageType`,
 which can be either `WindowsImageType.STANDARD`, the default, or `WindowsImageType.SERVER_2019`:
@@ -399,6 +386,50 @@ new codebuild.Project(this, 'Project', {
 })
 ```
 
+## Debugging builds interactively using SSM Session Manager
+
+Integration with SSM Session Manager makes it possible to add breakpoints to your
+build commands, pause the build there and log into the container to interactively
+debug the environment.
+
+To do so, you need to:
+
+* Create the build with `ssmSessionPermissions: true`.
+* Use a build image with SSM agent installed and configured (default CodeBuild images come with the image preinstalled).
+* Start the build with [debugSessionEnabled](https://docs.aws.amazon.com/codebuild/latest/APIReference/API_StartBuild.html#CodeBuild-StartBuild-request-debugSessionEnabled) set to true.
+
+If these conditions are met, execution of the command `codebuild-breakpoint`
+will suspend your build and allow you to attach a Session Manager session from
+the CodeBuild console.
+
+For more information, see [View a running build in Session
+Manager](https://docs.aws.amazon.com/codebuild/latest/userguide/session-manager.html)
+in the CodeBuild documentation.
+
+Example:
+
+```ts
+new codebuild.Project(this, 'Project', {
+  environment: {
+    buildImage: codebuild.LinuxBuildImage.STANDARD_6_0,
+  },
+  ssmSessionPermissions: true,
+  buildSpec: codebuild.BuildSpec.fromObject({
+    version: '0.2',
+    phases: {
+      build: {
+        commands: [
+          // Pause the build container if possible
+          'codebuild-breakpoint',
+          // Regular build in a script in the repository
+          './my-build.sh',
+        ],
+      },
+    },
+  }),
+})
+```
+
 ## Credentials
 
 CodeBuild allows you to store credentials used when communicating with various sources,
@@ -488,7 +519,32 @@ const project = new codebuild.Project(this, 'Project', {
 });
 ```
 
-If you do that, you need to grant the project's role permissions to write reports to that report group:
+For a code coverage report, you can specify a report group with the code coverage report group type.
+
+```ts
+declare const source: codebuild.Source;
+
+// create a new ReportGroup
+const reportGroup = new codebuild.ReportGroup(this, 'ReportGroup', {
+    type: codebuild.ReportGroupType.CODE_COVERAGE
+});
+
+const project = new codebuild.Project(this, 'Project', {
+  source,
+  buildSpec: codebuild.BuildSpec.fromObject({
+    // ...
+    reports: {
+      [reportGroup.reportGroupArn]: {
+        files: '**/*',
+        'base-directory': 'build/coverage-report.xml',
+        'file-format': 'JACOCOXML'
+      },
+    },
+  }),
+});
+```
+
+If you specify a report group, you need to grant the project's role permissions to write reports to that report group:
 
 ```ts
 declare const project: codebuild.Project;
@@ -496,6 +552,8 @@ declare const reportGroup: codebuild.ReportGroup;
 
 reportGroup.grantWrite(project);
 ```
+
+The created policy will adjust to the report group type. If no type is specified when creating the report group the created policy will contain the action for the test report group type.
 
 For more information on the test reports feature,
 see the [AWS CodeBuild documentation](https://docs.aws.amazon.com/codebuild/latest/userguide/test-reporting.html).

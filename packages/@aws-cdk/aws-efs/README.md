@@ -36,9 +36,11 @@ const fileSystem = new efs.FileSystem(this, 'MyEfsFileSystem', {
   vpc: new ec2.Vpc(this, 'VPC'),
   lifecyclePolicy: efs.LifecyclePolicy.AFTER_14_DAYS, // files are not transitioned to infrequent access (IA) storage by default
   performanceMode: efs.PerformanceMode.GENERAL_PURPOSE, // default
-  outInfrequentAccessPolicy: efs.OutOfInfrequentAccessPolicy.AFTER_1_ACCESS, // files are not transitioned back from (infrequent access) IA to primary storage by default
+  outOfInfrequentAccessPolicy: efs.OutOfInfrequentAccessPolicy.AFTER_1_ACCESS, // files are not transitioned back from (infrequent access) IA to primary storage by default
 });
 ```
+
+⚠️ An Amazon EFS file system's performance mode can't be MAX_IO when its throughputMode is ELASTIC.
 
 ⚠️ An Amazon EFS file system's performance mode can't be changed after the file system has been created.
 Updating this property will replace the file system.
@@ -159,6 +161,6 @@ You can configure the file system to be destroyed on stack deletion by setting a
 ```ts
 const fileSystem =  new efs.FileSystem(this, 'EfsFileSystem', {
   vpc: new ec2.Vpc(this, 'VPC'),
-  removalPolicy: RemovalPolicy.DESTROY
+  removalPolicy: RemovalPolicy.DESTROY,
 });
 ```

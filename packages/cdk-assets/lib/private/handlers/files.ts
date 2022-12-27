@@ -10,6 +10,13 @@ import { pathExists } from '../fs-extra';
 import { replaceAwsPlaceholders } from '../placeholders';
 import { shell } from '../shell';
 
+/**
+ * The size of an empty zip file is 22 bytes
+ *
+ * Ref: https://en.wikipedia.org/wiki/ZIP_(file_format)
+ */
+const EMPTY_ZIP_FILE_SIZE = 22;
+
 export class FileAssetHandler implements IAssetHandler {
   private readonly fileCacheRoot: string;
 
@@ -19,6 +26,8 @@ export class FileAssetHandler implements IAssetHandler {
     private readonly host: IHandlerHost) {
     this.fileCacheRoot = path.join(workDir, '.cache');
   }
+
+  public async build(): Promise<void> {}
 
   public async publish(): Promise<void> {
     const destination = await replaceAwsPlaceholders(this.asset.destination, this.host.aws);
@@ -49,19 +58,23 @@ export class FileAssetHandler implements IAssetHandler {
     // required for SCP rules denying uploads without encryption header
     let paramsEncryption: {[index: string]:any}= {};
     const encryption2 = await bucketInfo.bucketEncryption(s3, destination.bucketName);
-    switch (encryption2) {
-      case BucketEncryption.NO_ENCRYPTION:
+    switch (encryption2.type) {
+      case 'no_encryption':
         break;
-      case BucketEncryption.SSEAlgorithm_AES256:
+      case 'aes256':
         paramsEncryption = { ServerSideEncryption: 'AES256' };
         break;
-      case BucketEncryption.SSEAlgorithm_aws_kms:
-        paramsEncryption = { ServerSideEncryption: 'aws:kms' };
+      case 'kms':
+        // We must include the key ID otherwise S3 will encrypt with the default key
+        paramsEncryption = {
+          ServerSideEncryption: 'aws:kms',
+          SSEKMSKeyId: encryption2.kmsKeyId,
+        };
         break;
-      case BucketEncryption.DOES_NOT_EXIST:
+      case 'does_not_exist':
         this.host.emitMessage(EventType.DEBUG, `No bucket named '${destination.bucketName}'. Is account ${await account()} bootstrapped?`);
         break;
-      case BucketEncryption.ACCES_DENIED:
+      case 'access_denied':
         this.host.emitMessage(EventType.DEBUG, `Could not read encryption settings of bucket '${destination.bucketName}': uploading with default settings ("cdk bootstrap" to version 9 if your organization's policies prevent a successful upload or to get rid of this message).`);
         break;
     }
@@ -97,12 +110,12 @@ export class FileAssetHandler implements IAssetHandler {
       const packagedPath = path.join(this.fileCacheRoot, `${this.asset.id.assetId}.zip`);
 
       if (await pathExists(packagedPath)) {
-        this.host.emitMessage(EventType.CACHED, `From cache ${path}`);
+        this.host.emitMessage(EventType.CACHED, `From cache ${packagedPath}`);
         return { packagedPath, contentType };
       }
 
-      this.host.emitMessage(EventType.BUILD, `Zip ${fullPath} -> ${path}`);
-      await zipDirectory(fullPath, packagedPath);
+      this.host.emitMessage(EventType.BUILD, `Zip ${fullPath} -> ${packagedPath}`);
+      await zipDirectory(fullPath, packagedPath, (m) => this.host.emitMessage(EventType.DEBUG, m));
       return { packagedPath, contentType };
     } else {
       const contentType = mime.getType(fullPath) ?? 'application/octet-stream';
@@ -126,13 +139,13 @@ enum BucketOwnership {
   SOMEONE_ELSES_OR_NO_ACCESS
 }
 
-enum BucketEncryption {
-  NO_ENCRYPTION,
-  SSEAlgorithm_AES256,
-  SSEAlgorithm_aws_kms,
-  ACCES_DENIED,
-  DOES_NOT_EXIST
-}
+type BucketEncryption =
+  | { readonly type: 'no_encryption' }
+  | { readonly type: 'aes256' }
+  | { readonly type: 'kms'; readonly kmsKeyId?: string }
+  | { readonly type: 'access_denied' }
+  | { readonly type: 'does_not_exist' }
+  ;
 
 async function objectExists(s3: AWS.S3, bucket: string, key: string) {
   /*
@@ -145,9 +158,19 @@ async function objectExists(s3: AWS.S3, bucket: string, key: string) {
    * prefix, and limiting results to 1. Since the list operation returns keys ordered by binary
    * UTF-8 representation, the key we are looking for is guaranteed to always be the first match
    * returned if it exists.
+   *
+   * If the file is too small, we discount it as a cache hit. There is an issue
+   * somewhere that sometimes produces empty zip files, and we would otherwise
+   * never retry building those assets without users having to manually clear
+   * their bucket, which is a bad experience.
    */
   const response = await s3.listObjectsV2({ Bucket: bucket, Prefix: key, MaxKeys: 1 }).promise();
-  return response.Contents != null && response.Contents.some(object => object.Key === key);
+  return (
+    response.Contents != null &&
+    response.Contents.some(
+      (object) => object.Key === key && (object.Size == null || object.Size > EMPTY_ZIP_FILE_SIZE),
+    )
+  );
 }
 
 
@@ -218,23 +241,24 @@ class BucketInformation {
       const encryption = await s3.getBucketEncryption({ Bucket: bucket }).promise();
       const l = encryption?.ServerSideEncryptionConfiguration?.Rules?.length ?? 0;
       if (l > 0) {
-        let ssealgo = encryption?.ServerSideEncryptionConfiguration?.Rules[0]?.ApplyServerSideEncryptionByDefault?.SSEAlgorithm;
-        if (ssealgo === 'AES256') return BucketEncryption.SSEAlgorithm_AES256;
-        if (ssealgo === 'aws:kms') return BucketEncryption.SSEAlgorithm_aws_kms;
+        const apply = encryption?.ServerSideEncryptionConfiguration?.Rules[0]?.ApplyServerSideEncryptionByDefault;
+        let ssealgo = apply?.SSEAlgorithm;
+        if (ssealgo === 'AES256') return { type: 'aes256' };
+        if (ssealgo === 'aws:kms') return { type: 'kms', kmsKeyId: apply?.KMSMasterKeyID };
       }
-      return BucketEncryption.NO_ENCRYPTION;
+      return { type: 'no_encryption' };
     } catch (e) {
       if (e.code === 'NoSuchBucket') {
-        return BucketEncryption.DOES_NOT_EXIST;
+        return { type: 'does_not_exist' };
       }
       if (e.code === 'ServerSideEncryptionConfigurationNotFoundError') {
-        return BucketEncryption.NO_ENCRYPTION;
+        return { type: 'no_encryption' };
       }
 
       if (['AccessDenied', 'AllAccessDisabled'].includes(e.code)) {
-        return BucketEncryption.ACCES_DENIED;
+        return { type: 'access_denied' };
       }
-      return BucketEncryption.NO_ENCRYPTION;
+      return { type: 'no_encryption' };
     }
   }
 }

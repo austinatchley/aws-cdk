@@ -1,4 +1,4 @@
-import '@aws-cdk/assert-internal/jest';
+import { Template } from '@aws-cdk/assertions';
 import { Names, Stack } from '@aws-cdk/core';
 import * as eks from '../lib';
 import { KubernetesPatch, PatchType } from '../lib/k8s-patch';
@@ -20,7 +20,7 @@ describe('k8s patch', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-KubernetesPatch', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-KubernetesPatch', {
       ServiceToken: {
         'Fn::GetAtt': [
           'awscdkawseksKubectlProviderNestedStackawscdkawseksKubectlProviderNestedStackResourceA7AEBA6B',
@@ -43,10 +43,9 @@ describe('k8s patch', () => {
     });
 
     // also make sure a dependency on the barrier is added to the patch construct.
-    expect(patch.node.dependencies.map(d => Names.nodeUniqueId(d.target.node))).toEqual(['MyClusterKubectlReadyBarrier7547948A']);
-
-
+    expect(patch.node.dependencies.map(d => Names.nodeUniqueId(d.node))).toEqual(['MyClusterKubectlReadyBarrier7547948A']);
   });
+
   test('defaults to "strategic" patch type if no patchType is specified', () => {
     // GIVEN
     const stack = new Stack();
@@ -59,11 +58,11 @@ describe('k8s patch', () => {
       restorePatch: { restore: { patch: 123 } },
       resourceName: 'myResourceName',
     });
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-KubernetesPatch', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-KubernetesPatch', {
       PatchType: 'strategic',
     });
-
   });
+
   test('uses specified to patch type if specified', () => {
     // GIVEN
     const stack = new Stack();
@@ -92,18 +91,17 @@ describe('k8s patch', () => {
       patchType: PatchType.STRATEGIC,
     });
 
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-KubernetesPatch', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-KubernetesPatch', {
       ResourceName: 'jsonPatchResource',
       PatchType: 'json',
     });
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-KubernetesPatch', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-KubernetesPatch', {
       ResourceName: 'mergePatchResource',
       PatchType: 'merge',
     });
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-KubernetesPatch', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-KubernetesPatch', {
       ResourceName: 'strategicPatchResource',
       PatchType: 'strategic',
     });
-
   });
 });

@@ -1,11 +1,9 @@
-import '@aws-cdk/assert-internal/jest';
-import { ResourcePart } from '@aws-cdk/assert-internal';
+import { Template } from '@aws-cdk/assertions';
 import * as ec2 from '@aws-cdk/aws-ec2';
 import * as iam from '@aws-cdk/aws-iam';
 import * as kms from '@aws-cdk/aws-kms';
 import { Stack, Tags } from '@aws-cdk/core';
 import * as eks from '../lib';
-
 
 const CLUSTER_VERSION = eks.KubernetesVersion.V1_21;
 
@@ -21,14 +19,13 @@ describe('fargate', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-FargateProfile', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-FargateProfile', {
       Config: {
         clusterName: { Ref: 'MyCluster8AD82BF8' },
         podExecutionRoleArn: { 'Fn::GetAtt': ['MyClusterfargateprofileMyProfilePodExecutionRole4795C054', 'Arn'] },
         selectors: [{ namespace: 'default' }],
       },
     });
-
   });
 
   test('supports specifying a profile name', () => {
@@ -43,7 +40,7 @@ describe('fargate', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-FargateProfile', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-FargateProfile', {
       Config: {
         clusterName: { Ref: 'MyCluster8AD82BF8' },
         podExecutionRoleArn: { 'Fn::GetAtt': ['MyClusterfargateprofileMyProfilePodExecutionRole4795C054', 'Arn'] },
@@ -51,7 +48,6 @@ describe('fargate', () => {
         fargateProfileName: 'MyProfileName',
       },
     });
-
   });
 
   test('supports custom execution role', () => {
@@ -67,14 +63,13 @@ describe('fargate', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-FargateProfile', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-FargateProfile', {
       Config: {
         clusterName: { Ref: 'MyCluster8AD82BF8' },
         podExecutionRoleArn: { 'Fn::GetAtt': ['MyRoleF48FFE04', 'Arn'] },
         selectors: [{ namespace: 'default' }],
       },
     });
-
   });
 
   test('supports tags through aspects', () => {
@@ -91,7 +86,7 @@ describe('fargate', () => {
     Tags.of(cluster).add('propTag', '123');
 
     // THEN
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-FargateProfile', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-FargateProfile', {
       Config: {
         selectors: [{ namespace: 'default' }],
         clusterName: { Ref: 'MyCluster8AD82BF8' },
@@ -102,7 +97,6 @@ describe('fargate', () => {
         },
       },
     });
-
   });
 
   test('supports specifying vpc', () => {
@@ -122,7 +116,7 @@ describe('fargate', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-FargateProfile', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-FargateProfile', {
       Config: {
         clusterName: { Ref: 'MyCluster8AD82BF8' },
         podExecutionRoleArn: { 'Fn::GetAtt': ['MyClusterfargateprofileMyProfilePodExecutionRole4795C054', 'Arn'] },
@@ -130,7 +124,6 @@ describe('fargate', () => {
         subnets: ['priv1'],
       },
     });
-
   });
 
   test('fails if there are no selectors or if there are more than 5', () => {
@@ -150,7 +143,6 @@ describe('fargate', () => {
         { namespace: '6' },
       ],
     }));
-
   });
 
   test('FargateCluster creates an EKS cluster fully managed by Fargate', () => {
@@ -161,7 +153,7 @@ describe('fargate', () => {
     new eks.FargateCluster(stack, 'FargateCluster', { version: CLUSTER_VERSION });
 
     // THEN
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-KubernetesPatch', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-KubernetesPatch', {
       ResourceName: 'deployment/coredns',
       ResourceNamespace: 'kube-system',
       ApplyPatchJson: '{"spec":{"template":{"metadata":{"annotations":{"eks.amazonaws.com/compute-type":"fargate"}}}}}',
@@ -171,7 +163,7 @@ describe('fargate', () => {
       },
     });
 
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-FargateProfile', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-FargateProfile', {
       Config: {
         clusterName: {
           Ref: 'FargateCluster019F03E8',
@@ -188,7 +180,6 @@ describe('fargate', () => {
         ],
       },
     });
-
   });
 
   test('can create FargateCluster with a custom profile', () => {
@@ -204,7 +195,7 @@ describe('fargate', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-FargateProfile', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-FargateProfile', {
       Config: {
         clusterName: {
           Ref: 'FargateCluster019F03E8',
@@ -222,7 +213,6 @@ describe('fargate', () => {
         ],
       },
     });
-
   });
 
   test('custom profile name is "custom" if no custom profile name is provided', () => {
@@ -238,7 +228,7 @@ describe('fargate', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-FargateProfile', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-FargateProfile', {
       Config: {
         clusterName: {
           Ref: 'FargateCluster019F03E8',
@@ -255,7 +245,6 @@ describe('fargate', () => {
         ],
       },
     });
-
   });
 
   test('multiple Fargate profiles added to a cluster are processed sequentially', () => {
@@ -272,14 +261,14 @@ describe('fargate', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-FargateProfile', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-FargateProfile', {
       Config: {
         clusterName: { Ref: 'MyCluster8AD82BF8' },
         podExecutionRoleArn: { 'Fn::GetAtt': ['MyClusterfargateprofileMyProfile1PodExecutionRole794E9E37', 'Arn'] },
         selectors: [{ namespace: 'namespace1' }],
       },
     });
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-FargateProfile', {
+    Template.fromStack(stack).hasResource('Custom::AWSCDK-EKS-FargateProfile', {
       Properties: {
         ServiceToken: {
           'Fn::GetAtt': [
@@ -298,9 +287,7 @@ describe('fargate', () => {
         'MyClusterfargateprofileMyProfile1PodExecutionRole794E9E37',
         'MyClusterfargateprofileMyProfile1879D501A',
       ],
-    }, ResourcePart.CompleteDefinition);
-
-
+    });
   });
 
   test('fargate role is added to RBAC', () => {
@@ -311,7 +298,7 @@ describe('fargate', () => {
     new eks.FargateCluster(stack, 'FargateCluster', { version: CLUSTER_VERSION });
 
     // THEN
-    expect(stack).toHaveResource('Custom::AWSCDK-EKS-KubernetesResource', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-KubernetesResource', {
       Manifest: {
         'Fn::Join': [
           '',
@@ -342,7 +329,6 @@ describe('fargate', () => {
         ],
       },
     });
-
   });
 
   test('allow cluster creation role to iam:PassRole on fargate pod execution role', () => {
@@ -353,7 +339,7 @@ describe('fargate', () => {
     new eks.FargateCluster(stack, 'FargateCluster', { version: CLUSTER_VERSION });
 
     // THEN
-    expect(stack).toHaveResourceLike('AWS::IAM::Policy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: {
         Statement: [
           {
@@ -427,7 +413,6 @@ describe('fargate', () => {
         ],
       },
     });
-
   });
 
   test('supports passing secretsEncryptionKey with FargateCluster', () => {
@@ -442,7 +427,7 @@ describe('fargate', () => {
     });
 
     // THEN
-    expect(stack).toHaveResourceLike('Custom::AWSCDK-EKS-Cluster', {
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-Cluster', {
       Config: {
         encryptionConfig: [{
           provider: {
@@ -457,6 +442,32 @@ describe('fargate', () => {
         }],
       },
     });
+  });
 
+  test('supports cluster logging with FargateCluster', () => {
+    // GIVEN
+    const stack = new Stack();
+
+    // WHEN
+
+    new eks.FargateCluster(stack, 'FargateCluster', {
+      version: CLUSTER_VERSION,
+      clusterLogging: [
+        eks.ClusterLoggingTypes.API,
+        eks.ClusterLoggingTypes.AUTHENTICATOR,
+        eks.ClusterLoggingTypes.SCHEDULER,
+      ],
+    });
+
+    //THEN
+    Template.fromStack(stack).hasResourceProperties('Custom::AWSCDK-EKS-Cluster', {
+      Config: {
+        logging: {
+          clusterLogging: [
+            { enabled: true, types: ['api', 'authenticator', 'scheduler'] },
+          ],
+        },
+      },
+    });
   });
 });

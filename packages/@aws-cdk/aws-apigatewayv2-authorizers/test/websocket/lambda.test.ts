@@ -11,7 +11,7 @@ describe('WebSocketLambdaAuthorizer', () => {
     const stack = new Stack();
 
     const handler = new Function(stack, 'auth-function', {
-      runtime: Runtime.NODEJS_12_X,
+      runtime: Runtime.NODEJS_14_X,
       code: Code.fromInline('exports.handler = () => {return true}'),
       handler: 'index.handler',
     });
@@ -35,7 +35,7 @@ describe('WebSocketLambdaAuthorizer', () => {
       Name: 'default-authorizer',
       AuthorizerType: 'REQUEST',
       IdentitySource: [
-        '$request.header.Authorization',
+        'route.request.header.Authorization',
       ],
     });
 

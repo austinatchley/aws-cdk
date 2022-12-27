@@ -193,6 +193,28 @@ integTest('can dump the template, modify and use it to deploy a custom bootstrap
   });
 }));
 
+integTest('can use the default permissions boundary to bootstrap', withDefaultFixture(async (fixture) => {
+  let template = await fixture.cdkBootstrapModern({
+    // toolkitStackName doesn't matter for this particular invocation
+    toolkitStackName: fixture.bootstrapStackName,
+    showTemplate: true,
+    examplePermissionsBoundary: true,
+  });
+
+  expect(template).toContain('PermissionsBoundary');
+}));
+
+integTest('can use the custom permissions boundary to bootstrap', withDefaultFixture(async (fixture) => {
+  let template = await fixture.cdkBootstrapModern({
+    // toolkitStackName doesn't matter for this particular invocation
+    toolkitStackName: fixture.bootstrapStackName,
+    showTemplate: true,
+    customPermissionsBoundary: 'permission-boundary-name',
+  });
+
+  expect(template).toContain('permission-boundary-name');
+}));
+
 integTest('switch on termination protection, switch is left alone on re-bootstrap', withDefaultFixture(async (fixture) => {
   const bootstrapStackName = fixture.bootstrapStackName;
 
@@ -252,3 +274,28 @@ integTest('can deploy modern-synthesized stack even if bootstrap stack name is u
     ],
   });
 }));
+
+integTest('create ECR with tag IMMUTABILITY to set on', withDefaultFixture(async (fixture) => {
+  const bootstrapStackName = fixture.bootstrapStackName;
+
+  await fixture.cdkBootstrapModern({
+    verbose: true,
+    toolkitStackName: bootstrapStackName,
+  });
+
+  const response = await fixture.aws.cloudFormation('describeStackResources', {
+    StackName: bootstrapStackName,
+  });
+  const ecrResource = response.StackResources?.find(resource => resource.LogicalResourceId === 'ContainerAssetsRepository');
+  expect(ecrResource).toBeDefined();
+
+  const ecrResponse = await fixture.aws.ecr('describeRepositories', {
+    repositoryNames: [
+      // This is set, as otherwise we don't end up here
+      ecrResource?.PhysicalResourceId ?? '',
+    ],
+  });
+
+  expect(ecrResponse.repositories?.[0].imageTagMutability).toEqual('IMMUTABLE');
+}));
+

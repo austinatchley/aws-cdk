@@ -44,6 +44,13 @@ export interface BundlingOptions {
   readonly volumes?: DockerVolume[];
 
   /**
+   * Where to mount the specified volumes from
+   * @see https://docs.docker.com/engine/reference/commandline/run/#mount-volumes-from-container---volumes-from
+   * @default - no containers are specified to mount volumes from
+   */
+  readonly volumesFrom?: string[];
+
+  /**
    * The environment variables to pass to the Docker container.
    *
    * @default - no environment variables.
@@ -95,6 +102,12 @@ export interface BundlingOptions {
    * @default - no security options
    */
   readonly securityOpt?: string;
+  /**
+   * Docker [Networking options](https://docs.docker.com/engine/reference/commandline/run/#connect-a-container-to-a-network---network)
+   *
+   * @default - no networking options
+   */
+  readonly network?: string;
 }
 
 /**
@@ -198,8 +211,14 @@ export class BundlingDockerImage {
       ...options.securityOpt
         ? ['--security-opt', options.securityOpt]
         : [],
+      ...options.network
+        ? ['--network', options.network]
+        : [],
       ...options.user
         ? ['-u', options.user]
+        : [],
+      ...options.volumesFrom
+        ? flatten(options.volumesFrom.map(v => ['--volumes-from', v]))
         : [],
       ...flatten(volumes.map(v => ['-v', `${v.hostPath}:${v.containerPath}:${isSeLinux() ? 'z,' : ''}${v.consistency ?? DockerVolumeConsistency.DELEGATED}`])),
       ...flatten(Object.entries(environment).map(([k, v]) => ['--env', `${k}=${v}`])),
@@ -272,6 +291,7 @@ export class DockerImage extends BundlingDockerImage {
       'build', '-t', tag,
       ...(options.file ? ['-f', join(path, options.file)] : []),
       ...(options.platform ? ['--platform', options.platform] : []),
+      ...(options.targetStage ? ['--target', options.targetStage] : []),
       ...flatten(Object.entries(buildArgs).map(([k, v]) => ['--build-arg', `${k}=${v}`])),
       path,
     ];
@@ -432,6 +452,13 @@ export interface DockerRunOptions {
   readonly volumes?: DockerVolume[];
 
   /**
+   * Where to mount the specified volumes from
+   * @see https://docs.docker.com/engine/reference/commandline/run/#mount-volumes-from-container---volumes-from
+   * @default - no containers are specified to mount volumes from
+   */
+  readonly volumesFrom?: string[];
+
+  /**
    * The environment variables to pass to the container.
    *
    * @default - no environment variables.
@@ -459,6 +486,13 @@ export interface DockerRunOptions {
    * @default - no security options
    */
   readonly securityOpt?: string;
+
+  /**
+   * Docker [Networking options](https://docs.docker.com/engine/reference/commandline/run/#connect-a-container-to-a-network---network)
+   *
+   * @default - no networking options
+   */
+  readonly network?: string;
 }
 
 /**
@@ -487,6 +521,15 @@ export interface DockerBuildOptions {
    * @default - no platform specified
    */
   readonly platform?: string;
+
+  /**
+   * Set build target for multi-stage container builds. Any stage defined afterwards will be ignored.
+   *
+   * Example value: `build-env`
+   *
+   * @default - Build all stages defined in the Dockerfile
+   */
+  readonly targetStage?: string;
 }
 
 function flatten(x: string[][]) {

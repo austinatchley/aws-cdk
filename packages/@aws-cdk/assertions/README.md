@@ -9,6 +9,9 @@
 
 <!--END STABILITY BANNER-->
 
+If you're migrating from the old `assert` library, the migration guide can be found in
+[our GitHub repository](https://github.com/aws/aws-cdk/blob/main/packages/@aws-cdk/assertions/MIGRATING.md).
+
 Functions for writing test asserting against CDK applications, with focus on CloudFormation templates.
 
 The `Template` class includes a set of methods for writing assertions against CloudFormation templates. Use one of the `Template.fromXxx()` static methods to create an instance of this class.
@@ -30,6 +33,11 @@ Alternatively, assertions can be run on an existing CloudFormation template -
 const templateJson = '{ "Resources": ... }'; /* The CloudFormation template as JSON serialized string. */
 const template = Template.fromString(templateJson);
 ```
+
+**Cyclical Resources Note**
+
+If allowing cyclical references is desired, for example in the case of unprocessed Transform templates, supply TemplateParsingOptions and
+set skipCyclicalDependenciesCheck to true. In all other cases, will fail on detecting cyclical dependencies.
 
 ## Full Template Match
 
@@ -73,6 +81,17 @@ in a template.
 template.resourceCountIs('Foo::Bar', 2);
 ```
 
+You can also count the number of resources of a specific type whose `Properties`
+section contains the specified properties:
+
+```ts
+template.resourcePropertiesCountIs('Foo::Bar', {
+  Foo: 'Bar',
+  Baz: 5,
+  Qux: [ 'Waldo', 'Fred' ],
+}, 1);
+```
+
 ## Resource Matching & Retrieval
 
 Beyond resource counting, the module also allows asserting that a resource with
@@ -83,7 +102,18 @@ The following code asserts that the `Properties` section of a resource of type
 
 ```ts
 template.hasResourceProperties('Foo::Bar', {
-  Foo: 'Bar',
+  Lorem: 'Ipsum',
+  Baz: 5,
+  Qux: [ 'Waldo', 'Fred' ],
+});
+```
+
+You can also assert that the `Properties` section of all resources of type
+`Foo::Bar` contains the specified properties -
+
+```ts
+template.allResourcesProperties('Foo::Bar', {
+  Lorem: 'Ipsum',
   Baz: 5,
   Qux: [ 'Waldo', 'Fred' ],
 });
@@ -94,7 +124,17 @@ can use the `hasResource()` API.
 
 ```ts
 template.hasResource('Foo::Bar', {
-  Properties: { Foo: 'Bar' },
+  Properties: { Lorem: 'Ipsum' },
+  DependsOn: [ 'Waldo', 'Fred' ],
+});
+```
+
+You can also assert the definitions of all resources of a type using the 
+`allResources()` API.
+
+```ts
+template.allResources('Foo::Bar', {
+  Properties: { Lorem: 'Ipsum' },
   DependsOn: [ 'Waldo', 'Fred' ],
 });
 ```
@@ -139,7 +179,7 @@ expect(result.Foo).toEqual({ Value: 'Fred', Description: 'FooFred' });
 expect(result.Bar).toEqual({ Value: 'Fred', Description: 'BarFred' });
 ```
 
-The APIs `hasMapping()` and `findMappings()` provide similar functionalities.
+The APIs `hasMapping()`, `findMappings()`, `hasCondition()`, and `hasCondtions()` provide similar functionalities.
 
 ## Special Matchers
 
@@ -251,7 +291,7 @@ This matcher can be combined with any of the other matchers.
 // The following will NOT throw an assertion error
 template.hasResourceProperties('Foo::Bar', {
   Fred: {
-    Wobble: [ Match.anyValue(), "Flip" ],
+    Wobble: [ Match.anyValue(), Match.anyValue() ],
   },
 });
 
@@ -298,6 +338,35 @@ target array. Out of order will be recorded as a match failure.
 
 Alternatively, the `Match.arrayEquals()` API can be used to assert that the target is
 exactly equal to the pattern array.
+
+### String Matchers
+
+The `Match.stringLikeRegexp()` API can be used to assert that the target matches the
+provided regular expression.
+
+```ts
+// Given a template -
+// {
+//   "Resources": {
+//     "MyBar": {
+//       "Type": "Foo::Bar",
+//       "Properties": {
+//         "Template": "const includeHeaders = true;"
+//       }
+//     }
+//   }
+// }
+
+// The following will NOT throw an assertion error
+template.hasResourceProperties('Foo::Bar', {
+  Template: Match.stringLikeRegexp('includeHeaders = (true|false)'),
+});
+
+// The following will throw an assertion error
+template.hasResourceProperties('Foo::Bar', {
+  Template: Match.stringLikeRegexp('includeHeaders = null'),
+});
+```
 
 ### Not Matcher
 
@@ -371,7 +440,7 @@ template.hasResourceProperties('Foo::Bar', {
 
 ## Capturing Values
 
-This matcher APIs documented above allow capturing values in the matching entry
+The matcher APIs documented above allow capturing values in the matching entry
 (Resource, Output, Mapping, etc.). The following code captures a string from a
 matching resource.
 
@@ -462,4 +531,75 @@ template.hasResourceProperties('Foo::Bar', {
 fredCapture.asString(); // returns "Flob"
 fredCapture.next();     // returns true
 fredCapture.asString(); // returns "Quib"
+```
+
+## Asserting Annotations
+
+In addition to template matching, we provide an API for annotation matching.
+[Annotations](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.Annotations.html)
+can be added via the [Aspects](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.Aspects.html)
+API. You can learn more about Aspects [here](https://docs.aws.amazon.com/cdk/v2/guide/aspects.html).
+
+Say you have a `MyAspect` and a `MyStack` that uses `MyAspect`:
+
+```ts nofixture
+import * as cdk from '@aws-cdk/core';
+import { Construct, IConstruct } from 'constructs';
+
+class MyAspect implements cdk.IAspect {
+  public visit(node: IConstruct): void {
+    if (node instanceof cdk.CfnResource && node.cfnResourceType === 'Foo::Bar') {
+      this.error(node, 'we do not want a Foo::Bar resource');
+    }
+  }
+
+  protected error(node: IConstruct, message: string): void {
+    cdk.Annotations.of(node).addError(message);
+  }
+}
+
+class MyStack extends cdk.Stack {
+  constructor(scope: Construct, id: string) {
+    super(scope, id);
+
+    const stack = new cdk.Stack();
+    new cdk.CfnResource(stack, 'Foo', {
+      type: 'Foo::Bar',
+      properties: {
+        Fred: 'Thud',
+      },
+    });
+    cdk.Aspects.of(stack).add(new MyAspect());
+  }
+}
+```
+
+We can then assert that the stack contains the expected Error:
+
+```ts
+// import { Annotations } from '@aws-cdk/assertions';
+
+Annotations.fromStack(stack).hasError(
+  '/Default/Foo',
+  'we do not want a Foo::Bar resource',
+);
+```
+
+Here are the available APIs for `Annotations`:
+
+- `hasError()`, `hasNoError()`, and `findError()`
+- `hasWarning()`, `hasNoWarning()`, and `findWarning()`
+- `hasInfo()`, `hasNoInfo()`, and `findInfo()`
+
+The corresponding `findXxx()` API is complementary to the `hasXxx()` API, except instead
+of asserting its presence, it returns the set of matching messages.
+
+In addition, this suite of APIs is compatible with `Matchers` for more fine-grained control.
+For example, the following assertion works as well:
+
+```ts
+Annotations.fromStack(stack).hasError(
+  '/Default/Foo',
+  Match.stringLikeRegexp('.*Foo::Bar.*'),
+);
 ```

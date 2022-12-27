@@ -1,4 +1,4 @@
-import '@aws-cdk/assert-internal/jest';
+import { Template } from '@aws-cdk/assertions';
 import { App, Aws, Stack } from '@aws-cdk/core';
 import { OriginRequestPolicy, OriginRequestCookieBehavior, OriginRequestHeaderBehavior, OriginRequestQueryStringBehavior } from '../lib';
 
@@ -22,7 +22,7 @@ describe('OriginRequestPolicy', () => {
   test('minimal example', () => {
     new OriginRequestPolicy(stack, 'OriginRequestPolicy');
 
-    expect(stack).toHaveResource('AWS::CloudFront::OriginRequestPolicy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudFront::OriginRequestPolicy', {
       OriginRequestPolicyConfig: {
         Name: 'StackOriginRequestPolicy6B17D9ED',
         CookiesConfig: {
@@ -47,7 +47,7 @@ describe('OriginRequestPolicy', () => {
       queryStringBehavior: OriginRequestQueryStringBehavior.allowList('username'),
     });
 
-    expect(stack).toHaveResource('AWS::CloudFront::OriginRequestPolicy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudFront::OriginRequestPolicy', {
       OriginRequestPolicyConfig: {
         Name: 'MyPolicy',
         Comment: 'A default policy',
@@ -108,6 +108,7 @@ test('managed policies are provided', () => {
   expect(OriginRequestPolicy.CORS_S3_ORIGIN.originRequestPolicyId).toEqual('88a5eaf4-2fd4-4709-b370-b4c650ea3fcf');
   expect(OriginRequestPolicy.ALL_VIEWER.originRequestPolicyId).toEqual('216adef6-5c7f-47e4-b989-5492eafa07d3');
   expect(OriginRequestPolicy.ELEMENTAL_MEDIA_TAILOR.originRequestPolicyId).toEqual('775133bc-15f2-49f9-abea-afb2e0bf67d2');
+  expect(OriginRequestPolicy.ALL_VIEWER_AND_CLOUDFRONT_2022.originRequestPolicyId).toEqual('33f36d7e-f396-46d9-90e0-52428a34d9dc');
 });
 
 // OriginRequestCookieBehavior and OriginRequestQueryStringBehavior have identical behavior

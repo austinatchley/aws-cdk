@@ -1,4 +1,4 @@
-import '@aws-cdk/assert-internal/jest';
+import { Template } from '@aws-cdk/assertions';
 import { App, Duration, Stack } from '@aws-cdk/core';
 import { HeadersFrameOption, HeadersReferrerPolicy, ResponseHeadersPolicy } from '../lib';
 
@@ -30,7 +30,7 @@ describe('ResponseHeadersPolicy', () => {
   test('minimal example', () => {
     new ResponseHeadersPolicy(stack, 'ResponseHeadersPolicy');
 
-    expect(stack).toHaveResource('AWS::CloudFront::ResponseHeadersPolicy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
       ResponseHeadersPolicyConfig: {
         Name: 'StackResponseHeadersPolicy7B76F936',
       },
@@ -66,7 +66,7 @@ describe('ResponseHeadersPolicy', () => {
       },
     });
 
-    expect(stack).toHaveResource('AWS::CloudFront::ResponseHeadersPolicy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
       ResponseHeadersPolicyConfig: {
         Comment: 'A default policy',
         CorsConfig: {
@@ -140,6 +140,16 @@ describe('ResponseHeadersPolicy', () => {
             ReportUri: 'https://example.com/csp-report',
           },
         },
+      },
+    });
+  });
+
+  test('it truncates long auto-generated names', () => {
+    new ResponseHeadersPolicy(stack, 'AVeryLongIdThatMightSeemRidiculousButSometimesHappensInCdkPipelinesBecauseTheStageNamesConcatenatedWithTheRegionAreQuiteLongMuchLongerThanYouWouldExpect');
+
+    Template.fromStack(stack).hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+      ResponseHeadersPolicyConfig: {
+        Name: 'StackAVeryLongIdThatMightSeemRidiculousButSometimesHappensIntenatedWithTheRegionAreQuiteLongMuchLongerThanYouWouldExpect39083892',
       },
     });
   });
